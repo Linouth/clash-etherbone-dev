@@ -1,0 +1,10 @@
+*
+!*.*
+!*/
+
+**/__pycache__/
+**/work/
+**/sim_build/
+**/*.o
+**/*.ghw
+**/results.xml
