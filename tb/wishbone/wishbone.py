@@ -9,6 +9,17 @@ from cocotbext.wishbone.driver import WishboneMaster, WBOp
 logger = logging.getLogger('Wishbone test')
 logger.setLevel(logging.DEBUG)
 
+# class MyWishboneMaster(WishboneMaster):
+#     _signals = ["cyc_i", "stb_i", "we_i", "adr_i", "dat_i", "dat_o", "ack_o"]
+#     _optional_signals = ["sel_o", "err_o", "stall_o", "rty_o"]
+#
+#     def __init__(self, *args, **kwargs):
+#         print('a', self._signals)
+#         self._signals = ["cyc_i", "stb_i", "we_i", "adr_i", "dat_i", "dat_o", "ack_o"]
+#         self._optional_signals = ["sel_o", "err_o", "stall_o", "rty_o"]
+#         super().__init__(*args, **kwargs)
+#         print('b', self._signals)
+
 async def init_test(dut):
     dut.rst_n.value = 1
 
@@ -43,6 +54,8 @@ async def test_wishbone(dut):
                                      "datwr":"dat_i",
                                      "datrd":"dat_o",
                                      "ack":  "ack_o" })
+
+    # wbs = MyWishboneMaster(dut, "rx", dut.clk, width=32, timeout=10)
 
     await init_test(dut)
 

@@ -31,6 +31,8 @@ end wb_scratch;
 architecture behaviour of wb_scratch is
   type regmap_t is array (0 to g_num_regs-1) of std_logic_vector(c_wishbone_data_width-1 downto 0);
   signal regs : regmap_t;
+
+  signal s_ack : std_logic;
 begin
 
   process(clk, rst_n)
@@ -52,14 +54,15 @@ begin
           regs(v_index) <= wb_dat_i;
         end if;
 
-        wb_ack_o <= '1';
+        s_ack <= '1';
       else
         wb_dat_o <= (others => 'Z');
-        wb_ack_o  <= '0';
+        s_ack  <= '0';
       end if;
     end if;
   end process;
 
   --Wishbone interface
   wb_stall_o <= '0';
+  wb_ack_o <= s_ack;
 end behaviour;
