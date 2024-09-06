@@ -5,6 +5,7 @@ import asyncio
 import socket
 
 import cocotb
+from cocotb.utils import get_sim_time
 from cocotb.clock import Clock
 from cocotb.triggers import Timer, RisingEdge
 
@@ -35,8 +36,9 @@ async def init_test(dut):
     dut.cfg_cyc_i.value = 0
     dut.cfg_sel_i.value = 0xF
 
-    clock = Clock(dut.clk, 7, units='ns')
+    clock = Clock(dut.clk, 10, units='ns')
     cocotb.start_soon(clock.start())
+
 
     dut.rst_n.value = 0
     await Timer(205, units='ns')
@@ -48,16 +50,13 @@ async def first_test(dut):
     await init_test(dut)
 
 
-def bytestr_to_bytes(s, n=2):
-    pairs = [ ''.join(x) for x in itertools.batched(s, n) ]
-    return [ bytes.fromhex(x) for x in pairs ]
-
 def str_to_ints(s, n=2):
     pairs = [ ''.join(x) for x in itertools.batched(s, n) ]
     return [ int(x, base=16) for x in pairs ]
 
 
 @cocotb.test(skip=True)
+# @cocotb.test()
 async def test_etherbone(dut):
     edge = RisingEdge(dut.clk)
 
@@ -72,28 +71,11 @@ async def test_etherbone(dut):
                                      "datrd":"dat_o",
                                      "ack":  "ack_o" })
 
-    wb_cfg = WishboneMaster(dut, "cfg", dut.clk,
-                            width=32,   # size of data bus
-                            timeout=10, # in clock cycle number
-                            signals_dict={"cyc":  "cyc_i",
-                                        "stb":  "stb_i",
-                                        "we":   "we_i",
-                                        "adr":  "adr_i",
-                                        "datwr":"dat_i",
-                                        "datrd":"dat_o",
-                                        "ack":  "ack_o" })
-
-    # wb_tx = WishboneSlave(dut, "tx", dut.clk, width=32,
-    #                       waitreplygen=itertools.repeat(4),
-    #                       )
-
-    # wbs = MyWishboneMaster(dut, "rx", dut.clk, width=32, timeout=10)
-
-    dut.tx_datrd.value = 0
-    dut.tx_ack.value = 0
-    dut.tx_stall.value = 0
-    dut.tx_rty.value = 0
-    dut.tx_err.value = 0
+    dut.tx_dat_i.value = 0
+    dut.tx_ack_i.value = 0
+    dut.tx_stall_i.value = 0
+    dut.tx_rty_i.value = 0
+    dut.tx_err_i.value = 0
 
     await init_test(dut)
 
@@ -126,6 +108,8 @@ async def test_etherbone(dut):
     # PROBE = bytestr_to_bytes('c0ed11110010fe234e6f11ff00000086')
     # await wbs.send_cycle([WBOp(0b10, bytes.fromhex(PROBE_STR))])
 
+    LONG_STR = '4e6f1044a00f0008000080020000800000008004000080080000800c0000801000008014000080180000801ce80f00010000800300000004'
+
     await Timer(100, 'ns')
 
     # return
@@ -133,25 +117,28 @@ async def test_etherbone(dut):
     # await wb_rx.send_cycle([
     #     WBOp(0b10, int.from_bytes(x)) for x in bytestr_to_bytes(PROBE_STR, 8)
     # ])
-    await wb_rx.send_cycle([
-        WBOp(0b10, x) for x in str_to_ints(PROBE_STR, 8)
-    ])
 
-    # for _ in range(1):
+    dut.tx_ack_i.value = 1
+
+    await cocotb.start(wb_rx.send_cycle([
+        WBOp(0b00, x) for x in str_to_ints(LONG_STR, 8)
+    ]))
+
+    # for _ in range(4):
     #     transaction = await wb_tx.wait_for_recv()
     #     print(f"Received: {pprint(hex(transaction[0].datwr))}")
 
-    buf = []
-    for _ in range(20):
-        await edge
-        if dut.tx_stb.value and dut.tx_cyc.value:
-            buf.append(int(dut.tx_datwr))
-            dut.tx_ack.value = 1
-        else:
-            dut.tx_ack.value = 0
+    # buf = []
+    # for _ in range(20):
+    #     await edge
+    #     if dut.tx_stb.value and dut.tx_cyc.value:
+    #         buf.append(int(dut.tx_datwr))
+    #         dut.tx_ack.value = 1
+    #     else:
+    #         dut.tx_ack.value = 0
 
 
-    await Timer(200, 'ns')
+    await Timer(2000, 'ns')
 
 
 # class UDPServerProtocol(asyncio.DatagramProtocol):
@@ -167,8 +154,51 @@ async def test_etherbone(dut):
 #         logger.info(f'MSG received: {data}')
 #         self.queue.put_nowait((data,addr))
 
+def read_word(dut) -> int|str:
+    if dut.tx_cyc_o.value and not dut.tx_stall_i.value:
+        if dut.tx_stb_o.value:
+            dut.tx_ack_i.value = 1
+            out = int(dut.tx_dat_o)
+            logger.debug(f'Read tx_dat_o: {hex(out)}')
+        else:
+            out = 'cyc'
+    else:
+        out = 'stb'
+        dut.tx_ack_i.value = 0
 
-@cocotb.test()
+    return out
+
+async def read_data(dut):
+    buf = []
+
+    started = False
+    while True:
+        await RisingEdge(dut.clk)
+
+        word = read_word(dut)
+
+        if isinstance(word, str):
+            if word == 'cyc':
+                continue
+            elif word == 'stb':
+                if not started:
+                    continue
+                else:
+                    break
+            else:
+                raise ValueError('Unknown return value??')
+        started = True
+
+        buf.append(word)
+
+    out = b''.join([
+        x.to_bytes(4) for x in buf
+    ])
+    logger.debug(f'TX datastream: {out.hex()}')
+    return out
+
+
+@cocotb.test(skip=False)
 async def test_socket(dut):
     edge = RisingEdge(dut.clk)
 
@@ -197,49 +227,31 @@ async def test_socket(dut):
                                         "datrd":"dat_o",
                                         "ack":  "ack_o" })
 
-    # wb_tx = WishboneSlave(dut, "tx", dut.clk, width=32,
-    #                       waitreplygen=itertools.repeat(4),
-    #                       )
 
-    dut.tx_datrd.value = 0
-    dut.tx_ack.value = 0
-    dut.tx_stall.value = 0
-    dut.tx_rty.value = 0
-    dut.tx_err.value = 0
+    dut.tx_dat_i.value = 0
+    dut.tx_ack_i.value = 0
+    dut.tx_stall_i.value = 0
+    dut.tx_rty_i.value = 0
+    dut.tx_err_i.value = 0
 
     await init_test(dut)
 
     await Timer(100, 'ns')
 
-
-    for _ in range(2):
+    # for i in range(8):
+    while True:
         data, addr = sock.recvfrom(1024)
         data = data.hex()
+        print('udp got', data)
 
         cocotb.start_soon(wb_rx.send_cycle([
-            WBOp(0b10, x) for x in str_to_ints(data, 8)
+            WBOp(0, x) for x in str_to_ints(data, 8)
         ]))
 
-        # for _ in range(1):
-        #     transaction = await wb_tx.wait_for_recv()
-        #     print(f"Received: {pprint(hex(transaction[0].datwr))}")
-
-        buf = []
-        for _ in range(20):
-            await edge
-            #if dut.tx_stb.value and dut.tx_cyc.value and not dut.tx_stall.value:
-            if dut.tx_stb.value and dut.tx_cyc.value:
-                buf.append(int(dut.tx_datwr))
-                dut.tx_ack.value = 1
-            else:
-                dut.tx_ack.value = 0
-
-        resp = b''.join([
-            x.to_bytes(4) for x in buf
-        ])
-        logger.debug(f'TX data: {resp.hex()}')
+        resp = await read_data(dut)
 
         sock.sendto(resp, addr)
+        print('sent', resp)
 
         await Timer(100, 'ns')
 

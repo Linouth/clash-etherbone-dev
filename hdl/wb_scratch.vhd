@@ -16,15 +16,8 @@ entity wb_scratch is
     rst_n : in std_logic;
     clk : in std_logic;
 
-    wb_adr_i : in  std_logic_vector(1 downto 0);
-    wb_dat_i : in  std_logic_vector(c_wishbone_data_width-1 downto 0);
-    wb_dat_o : out std_logic_vector(c_wishbone_data_width-1 downto 0);
-    wb_cyc_i  : in  std_logic;
-    wb_sel_i  : in  std_logic_vector(c_wishbone_data_width/8-1 downto 0);
-    wb_stb_i  : in  std_logic;
-    wb_we_i   : in  std_logic;
-    wb_ack_o  : out std_logic;
-    wb_stall_o: out std_logic
+    wb_i    : in t_wishbone_slave_in;
+    wb_o    : out t_wishbone_slave_out
     );
 end wb_scratch;
 
@@ -33,36 +26,40 @@ architecture behaviour of wb_scratch is
   signal regs : regmap_t;
 
   signal s_ack : std_logic;
+
+  signal r_stb : std_logic;
 begin
 
   process(clk, rst_n)
     variable v_index : integer;
   begin
-    v_index := to_integer(unsigned(wb_adr_i));
-
     if rst_n = '0' then
       regs <= (others => (others => '0'));
     elsif rising_edge(clk) then
-      if wb_stb_i = '1' and wb_cyc_i = '1' then
+      r_stb <= wb_i.stb;
+
+      if wb_i.stb = '1' and wb_i.cyc = '1' then
+        v_index := to_integer(unsigned(wb_i.adr(31 downto 2)));
+
         -- Latches
-
-        if wb_we_i = '0' then
-          -- Read request 
-          wb_dat_o <= regs(v_index);
+        if v_index < g_num_regs then
+          if wb_i.we = '0' then
+            -- Read request 
+            wb_o.dat <= regs(v_index);
+          else
+            -- Write request
+            regs(v_index) <= wb_i.dat;
+          end if;
         else
-          -- Write request
-          regs(v_index) <= wb_dat_i;
+          wb_o.dat <= x"AAAAAAAA";
         end if;
-
-        s_ack <= '1';
       else
-        wb_dat_o <= (others => 'Z');
-        s_ack  <= '0';
+        wb_o.dat <= (others => '0');
       end if;
     end if;
   end process;
 
   --Wishbone interface
-  wb_stall_o <= '0';
-  wb_ack_o <= s_ack;
+  wb_o.stall <= '0';
+  wb_o.ack <= r_stb and wb_i.cyc;
 end behaviour;
