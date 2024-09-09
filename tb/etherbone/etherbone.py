@@ -233,17 +233,21 @@ class EtherboneDUT:
 PACKETS = OrderedDict({
     'probe':          ('4e6f11ff00000086', '4e6f164400000086'),
 
-    'read_scratch00': ('4e6f1044a00f00010000800000000000e80f00010000800100000004',
-                       '4e6f1444060f010000008000000000000e0f01000000800100000000'),
-    'write_scratch0': ('4e6f1044e80f010100000000001122330000800100000004',
-                       '4e6f144400000000000000000e0f01000000800100000000'),
-    'read_scratch01': ('4e6f1044a00f00010000800000000000e80f00010000800100000004',
-                       '4e6f1444060f010000008000001122330e0f01000000800100000000'),
+    'read_write_read_scratch0': {
+        'read_scratch00': ('4e6f1044a00f00010000800000000000e80f00010000800100000004',
+                        '4e6f1444060f010000008000000000000e0f01000000800100000000'),
+        'write_scratch0': ('4e6f1044e80f010100000000001122330000800100000004',
+                        '4e6f144400000000000000000e0f01000000800100000000'),
+        'read_scratch01': ('4e6f1044a00f00010000800000000000e80f00010000800100000004',
+                        '4e6f1444060f010000008000001122330e0f01000000800100000000'),
+    },
 
-    'write_scratch1': ('4e6f1044e80f010100000004aabbccdd0000800100000004',
-                       '4e6f144400000000000000000e0f01000000800100000000'),
-    'read_scratch1':  ('4e6f1044a00f00010000800000000004e80f00010000800100000004',
-                       '4e6f1444060f010000008000aabbccdd0e0f01000000800100000000'),
+    'write_read_scratch1': {
+        'write_scratch1': ('4e6f1044e80f010100000004aabbccdd0000800100000004',
+                        '4e6f144400000000000000000e0f01000000800100000000'),
+        'read_scratch1':  ('4e6f1044a00f00010000800000000004e80f00010000800100000004',
+                        '4e6f1444060f010000008000aabbccdd0e0f01000000800100000000'),
+    },
 
     # Only valid if Scratchpad vendor ID ends with x"DEADBEEF"
     'read_sdb': ('4e6f1044a00f0001000080000000805ce80f00010000800100000004',
@@ -255,52 +259,59 @@ PACKETS = OrderedDict({
 
     # Write IP to config space through WB master -> cfg. Then read from config
     # regs.
-    'write_ip': ('4e6f1044e80f0101000000387f0000010000800100000004',
-                   '4e6f144400000000000000000e0f01000000800100000000'),
-    'read_ip':  ('4e6f1044e80f00010000800000000018',
-                 '4e6f14440e0f0100000080007f000001')
+    'write_read_ip': {
+        'write_ip': ('4e6f1044e80f0101000000387f0000010000800100000004',
+                    '4e6f144400000000000000000e0f01000000800100000000'),
+        'read_ip':  ('4e6f1044e80f00010000800000000018',
+                    '4e6f14440e0f0100000080007f000001')
+    },
 })
 
 
-@cocotb.test(skip=False)
-async def test_etherbone_packets(dut):
-    log = logger.getChild('packets')
+@cocotb.coroutine
+async def run_packet_test(dut, test_name, test):
+    log = logger.getChild('PACKETS')
     log.setLevel('INFO')
     eb_dut = EtherboneDUT(dut, log=log)
     await eb_dut.reset()
-
-    for k,v in PACKETS.items():
-        packet, expect = v
+    
+    async def run(sub_name, pair):
+        packet, expect = pair
         await eb_dut.send(bytes.fromhex(packet))
         resp = await eb_dut.recv()
         assert(resp.hex() == expect)
-        logger.info(f'Packet {k} passed.')
+        log.info(f'Packet {test_name}.{sub_name} passed')
+
+    if isinstance(test, dict):
+        for k,v in test.items():
+            await run(k, v)
+    else:
+        await run(test_name, test)
+
+def generate_tests():
+    factory = TestFactory(run_packet_test)
+    factory.add_option(['test_name', 'test'], list(PACKETS.items()))
+    factory.generate_tests()
+generate_tests()
 
 
-'''
-Tests need to happen in specific order, or else the scratchpad is not set anymore
-@cocotb.coroutine
-async def run_test(dut, test_name, packet_pair):
-    log = logger.getChild('test_name')
-    log.setLevel('INFO')
-    eb_dut = EtherboneDUT(dut, log=log)
+@cocotb.test()
+async def test_ack_on_rx(dut):
+    eb_dut = EtherboneDUT(dut)
     await eb_dut.reset()
 
-    packet, expected = packet_pair
-    await eb_dut.send(bytes.fromhex(packet))
-    resp = await eb_dut.recv()
-    assert(resp.hex() == expected)
+    probe = '4e6f11ff00000086'
+    cocotb.start_soon(eb_dut.send(bytes.fromhex(probe)))
 
-factory = TestFactory(run_test)
-factory.add_option(['test_name', 'packet_pair'], list(PACKETS.items()))
-factory.generate_tests()
-'''
+    await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
+    assert(dut.rx_ack_o.value == 1)
 
 
-@cocotb.test(skip=False)
+@cocotb.test(skip=True)
 async def test_socket(dut):
-    l = logger.getChild('Socket')
-    eb_dut = EtherboneDUT(dut)
+    log = logger.getChild('Socket')
+    eb_dut = EtherboneDUT(dut, log=log)
     await eb_dut.reset()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
