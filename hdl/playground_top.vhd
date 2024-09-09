@@ -43,7 +43,7 @@ entity playground_top is
     tx_rty_i    : in std_logic;
     tx_err_i    : in std_logic;
 
-    -- Configuration Wishbone bus (slave)
+    -- Configuration Wishbone bus (slave) (Obsolete?)
     cfg_adr_i : in std_logic_vector(c_wishbone_address_width-1 downto 0);
     cfg_dat_i : in std_logic_vector(c_wishbone_data_width-1 downto 0);
     cfg_we_i  : in std_logic;
@@ -111,16 +111,16 @@ begin
   eb_tx_i.err <= tx_err_i;
   eb_tx_i.rty <= tx_rty_i;
 
-  eb_cfg_i.adr <= cfg_adr_i;
-  eb_cfg_i.dat <= cfg_dat_i;
-  eb_cfg_i.cyc <= cfg_cyc_i;
-  eb_cfg_i.stb <= cfg_stb_i;
-  eb_cfg_i.we  <= cfg_we_i;
-  eb_cfg_i.sel <= cfg_sel_i;
-  cfg_ack_o <= eb_cfg_o.ack;
-  cfg_stall_o <= eb_cfg_o.stall;
-  cfg_err_o <= eb_cfg_o.err;
-  cfg_rty_o <= eb_cfg_o.rty;
+  -- eb_cfg_i.adr <= cfg_adr_i;
+  -- eb_cfg_i.dat <= cfg_dat_i;
+  -- eb_cfg_i.cyc <= cfg_cyc_i;
+  -- eb_cfg_i.stb <= cfg_stb_i;
+  -- eb_cfg_i.we  <= cfg_we_i;
+  -- eb_cfg_i.sel <= cfg_sel_i;
+  -- cfg_ack_o <= eb_cfg_o.ack;
+  -- cfg_stall_o <= eb_cfg_o.stall;
+  -- cfg_err_o <= eb_cfg_o.err;
+  -- cfg_rty_o <= eb_cfg_o.rty;
 
 
   eb : eb_slave_top
@@ -156,6 +156,8 @@ begin
   port map(
     rst_n      => rst_n,
     clk        => clk,
+    wb_cfg_i   => eb_cfg_i,
+    wb_cfg_o   => eb_cfg_o,
     wb_i       => wbm_o,
     wb_o       => wbm_i
   );

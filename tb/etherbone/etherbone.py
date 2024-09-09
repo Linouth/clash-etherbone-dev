@@ -1,4 +1,5 @@
 import logging
+from logging import Logger
 import itertools
 from pprint import pprint
 import asyncio
@@ -6,6 +7,7 @@ import socket
 from dataclasses import dataclass
 from typing import List
 import struct
+from collections import OrderedDict
 
 import cocotb
 from cocotb.utils import get_sim_time
@@ -14,10 +16,17 @@ from cocotb.triggers import Timer, RisingEdge, Event
 from cocotb.types import Logic, LogicArray  #, ModifiableObject
 from cocotb.handle import ModifiableObject, SimHandleBase
 from cocotb.queue import Queue
+from cocotb.regression import TestFactory
 
 from cocotbext.wishbone.driver import WishboneMaster, WBOp
 
-logger = logging.getLogger('Wishbone test')
+''' Improvements
+- runner instead of Makefile
+- Proper test for each set of TXs (instead of all chunked together)
+- Decoder and encoder for EB packets (records mostly)
+'''
+
+logger = logging.getLogger('Etherbone')
 logger.setLevel(logging.DEBUG)
 
 
@@ -76,7 +85,9 @@ class WishboneMasterMonitor:
     stream is finished (signalled with an event) combine data in the list into
     one 'packet' that is awaited from recv()
     '''
-    def __init__(self, clk: SimHandleBase, port: WishboneMasterPort):
+    def __init__(self, clk: SimHandleBase, port: WishboneMasterPort, log: Logger|None):
+        self._log = log or logger
+
         self.clk = clk
         self.port = port
         self.packet_queue = Queue()
@@ -101,7 +112,7 @@ class WishboneMasterMonitor:
                     tx.ack_i.value = 1
                     word = tx.dat_o.value
                     self._words.append(word)
-                    logger.debug(f'Read monitor word: {hex(int(word))}')
+                    self._log.debug(f'Read monitor word: {hex(int(word))}')
                 else:
                     # Device not selected, or stalled
                     tx.ack_i.value = 0
@@ -124,7 +135,7 @@ class WishboneMasterMonitor:
                     int(x).to_bytes(4) for x in self._words
                 ])
                 self._words.clear()
-                logger.debug(f'Monitor datastream: {dat.hex()}')
+                self._log.debug(f'Monitor datastream: {dat.hex()}')
                 await self.packet_queue.put(dat)
 
                 self._words_ready.clear()
@@ -148,7 +159,9 @@ class WishboneMasterMonitor:
 
 
 class EtherboneDUT:
-    def __init__(self, dut, period=(10, 'ns')):
+    def __init__(self, dut, period=(10, 'ns'), log: Logger|None=None):
+        self._log = log or logger
+
         self.dut = dut
 
         self.clock = Clock(dut.clk, period[0], units=period[1])
@@ -165,6 +178,7 @@ class EtherboneDUT:
                                              "datrd":"dat_o",
                                              "ack":  "ack_o" })
 
+        # This is currently unconnected in hardware (looped back to EB master)
         self.cfg = WishboneMaster(dut, "cfg", dut.clk,
                                   width=32,
                                   timeout=20,
@@ -191,7 +205,7 @@ class EtherboneDUT:
         )
         init_wishbone_masters([self.tx_port])
 
-        self.tx = WishboneMasterMonitor(dut.clk, self.tx_port)
+        self.tx = WishboneMasterMonitor(dut.clk, self.tx_port, self._log)
         self.tx.start()
 
         dut.rst_n.value = 0
@@ -216,104 +230,81 @@ class EtherboneDUT:
         return await self.tx.recv()
 
 
-@cocotb.test(skip=True)
-# @cocotb.test()
-async def test_etherbone(dut):
-    edge = RisingEdge(dut.clk)
+PACKETS = OrderedDict({
+    'probe':          ('4e6f11ff00000086', '4e6f164400000086'),
 
-    wb_rx = WishboneMaster(dut, "rx", dut.clk,
-                         width=32,   # size of data bus
-                         timeout=10, # in clock cycle number
-                         signals_dict={"cyc":  "cyc_i",
-                                     "stb":  "stb_i",
-                                     "we":   "we_i",
-                                     "adr":  "adr_i",
-                                     "datwr":"dat_i",
-                                     "datrd":"dat_o",
-                                     "ack":  "ack_o" })
+    'read_scratch00': ('4e6f1044a00f00010000800000000000e80f00010000800100000004',
+                       '4e6f1444060f010000008000000000000e0f01000000800100000000'),
+    'write_scratch0': ('4e6f1044e80f010100000000001122330000800100000004',
+                       '4e6f144400000000000000000e0f01000000800100000000'),
+    'read_scratch01': ('4e6f1044a00f00010000800000000000e80f00010000800100000004',
+                       '4e6f1444060f010000008000001122330e0f01000000800100000000'),
 
-    tx = WishboneMasterPort(
-        dut.tx_dat_o,
-        dut.tx_dat_i,
-        dut.tx_adr_o,
-        dut.tx_sel_o,
-        dut.tx_stb_o,
-        dut.tx_cyc_o,
-        dut.tx_we_o,
-        dut.tx_ack_i,
-        dut.tx_stall_i,
-        dut.tx_err_i,
-        dut.tx_rty_i,
-    )
+    'write_scratch1': ('4e6f1044e80f010100000004aabbccdd0000800100000004',
+                       '4e6f144400000000000000000e0f01000000800100000000'),
+    'read_scratch1':  ('4e6f1044a00f00010000800000000004e80f00010000800100000004',
+                       '4e6f1444060f010000008000aabbccdd0e0f01000000800100000000'),
 
-    init_wishbone_masters([tx])
+    # Only valid if Scratchpad vendor ID ends with x"DEADBEEF"
+    'read_sdb': ('4e6f1044a00f0001000080000000805ce80f00010000800100000004',
+                 '4e6f1444060f010000008000deadbeef0e0f01000000800100000000'),
 
+    # Only valid if SDB address = 0x00008000
+    'read_cfg_sdb_addr': ('4e6f1044e80f0001000080000000000c',
+                          '4e6f14440e0f01000000800000008000'),
 
-    await init_test(dut)
-
-    await Timer(100, 'ns')
-
-    PROBE_STR = '4e6f11ff00000086'
-    # PROBE_STR = '45000024f003400040114cc37f0000017f000001c0ed11110010fe234e6f11ff00000086'
-    # PROBE = bytestr_to_bytes('c0ed11110010fe234e6f11ff00000086')
-    # await wbs.send_cycle([WBOp(0b10, bytes.fromhex(PROBE_STR))])
-
-    LONG_STR = '4e6f1044a00f0008000080020000800000008004000080080000800c0000801000008014000080180000801ce80f00010000800300000004'
-
-    await Timer(100, 'ns')
-
-    # return
-
-    # await wb_rx.send_cycle([
-    #     WBOp(0b10, int.from_bytes(x)) for x in bytestr_to_bytes(PROBE_STR, 8)
-    # ])
-
-    dut.tx_ack_i.value = 1
-
-    await cocotb.start(wb_rx.send_cycle([
-        WBOp(0b00, x) for x in str_to_ints(LONG_STR, 8)
-    ]))
-
-    # for _ in range(4):
-    #     transaction = await wb_tx.wait_for_recv()
-    #     print(f"Received: {pprint(hex(transaction[0].datwr))}")
-
-    # buf = []
-    # for _ in range(20):
-    #     await edge
-    #     if dut.tx_stb.value and dut.tx_cyc.value:
-    #         buf.append(int(dut.tx_datwr))
-    #         dut.tx_ack.value = 1
-    #     else:
-    #         dut.tx_ack.value = 0
+    # Write IP to config space through WB master -> cfg. Then read from config
+    # regs.
+    'write_ip': ('4e6f1044e80f0101000000387f0000010000800100000004',
+                   '4e6f144400000000000000000e0f01000000800100000000'),
+    'read_ip':  ('4e6f1044e80f00010000800000000018',
+                 '4e6f14440e0f0100000080007f000001')
+})
 
 
-    await Timer(2000, 'ns')
+@cocotb.test(skip=False)
+async def test_etherbone_packets(dut):
+    log = logger.getChild('packets')
+    log.setLevel('INFO')
+    eb_dut = EtherboneDUT(dut, log=log)
+    await eb_dut.reset()
+
+    for k,v in PACKETS.items():
+        packet, expect = v
+        await eb_dut.send(bytes.fromhex(packet))
+        resp = await eb_dut.recv()
+        assert(resp.hex() == expect)
+        logger.info(f'Packet {k} passed.')
 
 
-# class UDPServerProtocol(asyncio.DatagramProtocol):
-#     def __init__(self, queue):
-#         print('protocol init')
-#         self.queue = queue
-#         self.transport = None
-#
-#     def connection_made(self, transport):
-#         self.transport = transport
-#
-#     def datagram_received(self, data, addr):
-#         logger.info(f'MSG received: {data}')
-#         self.queue.put_nowait((data,addr))
+'''
+Tests need to happen in specific order, or else the scratchpad is not set anymore
+@cocotb.coroutine
+async def run_test(dut, test_name, packet_pair):
+    log = logger.getChild('test_name')
+    log.setLevel('INFO')
+    eb_dut = EtherboneDUT(dut, log=log)
+    await eb_dut.reset()
 
+    packet, expected = packet_pair
+    await eb_dut.send(bytes.fromhex(packet))
+    resp = await eb_dut.recv()
+    assert(resp.hex() == expected)
 
+factory = TestFactory(run_test)
+factory.add_option(['test_name', 'packet_pair'], list(PACKETS.items()))
+factory.generate_tests()
+'''
 
 
 @cocotb.test(skip=False)
 async def test_socket(dut):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(('0.0.0.0', 0x1111))
-
+    l = logger.getChild('Socket')
     eb_dut = EtherboneDUT(dut)
     await eb_dut.reset()
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('0.0.0.0', 0x1111))
 
     try:
         while True:
