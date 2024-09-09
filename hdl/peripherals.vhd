@@ -16,19 +16,6 @@ entity peripherals is
 
     wb_i    : in t_wishbone_slave_in;
     wb_o    : out t_wishbone_slave_out
-
-    -- wb_adr_i : in std_logic_vector(c_wishbone_address_width-1 downto 0);
-    -- wb_dat_i : in std_logic_vector(c_wishbone_data_width-1 downto 0);
-    -- wb_we_i  : in std_logic;
-    -- wb_sel_i : in std_logic_vector(c_wishbone_data_width/8-1 downto 0);
-    -- wb_stb_i : in std_logic;
-    -- wb_cyc_i : in std_logic;
-    --
-    -- wb_dat_o    : out std_logic_vector(c_wishbone_data_width-1 downto 0);
-    -- wb_ack_o    : out std_logic;
-    -- wb_stall_o  : out std_logic;
-    -- wb_rty_o    : out std_logic;
-    -- wb_err_o    : out std_logic
   );
 end peripherals;
 

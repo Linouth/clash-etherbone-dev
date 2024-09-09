@@ -80,14 +80,6 @@ architecture rtl of playground_top is
 
   constant c_sdb_address : t_wishbone_address := x"00008000";
 begin
-  -- Pretty sure these are just given so that you can look it up in the config
-  -- registers. The Ethernet hardware driving the RX and TX lines are
-  -- responsible to handle this... Right?
-  -- Well no, the RX module does handle this info some how?
-  -- s_my_mac <= (others => '0');
-  -- s_my_ip <= x"7f000001";
-  -- s_my_port <= x"1111";
-
   eb_rx_i.adr <= rx_adr_i;
   eb_rx_i.dat <= rx_dat_i;
   eb_rx_i.cyc <= rx_cyc_i;
@@ -134,8 +126,7 @@ begin
     EB_RX_o      => eb_rx_o,
     EB_TX_i      => eb_tx_i,
     EB_TX_o      => eb_tx_o,
-    -- msi_slave_o  => open,
-    -- msi_slave_i  => cc_dummy_slave_in,
+
     skip_stb_o   => open,
     skip_stall_i => s_skip_stall,
 
