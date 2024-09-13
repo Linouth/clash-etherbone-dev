@@ -1,0 +1,9 @@
+packages:
+  clash-tutorial.cabal
+  ../clash-protocols/clash-protocols
+  ../clash-protocols/clash-protocols-base
+
+write-ghc-environment-files: always
+
+-- Eliminates the need for `--enable-tests`, which is needed for HLS.
+tests: true
