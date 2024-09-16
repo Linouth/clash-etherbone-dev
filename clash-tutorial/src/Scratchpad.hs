@@ -5,8 +5,6 @@ import Protocols
 import Protocols.Wishbone
 import Data.Proxy
 
-import Debug.Trace
-import qualified Prelude as P
 
 type WBWord = Unsigned 32
 
@@ -14,7 +12,7 @@ wishboneScratchpad
   :: forall dom a addrWidth n .
   ( HiddenClockResetEnable dom
   , NFDataX a
-  , Num a
+  , Bits a
   , BitPack a
   , KnownNat addrWidth
   , 1 <= n
@@ -56,10 +54,10 @@ foo = fromInteger (natVal (Proxy :: Proxy n)-1)
 
 
 scratchpad
-  :: (KnownNat n, HiddenClockResetEnable dom, NFDataX a, Num a)
+  :: (KnownNat n, HiddenClockResetEnable dom, NFDataX a, Bits a)
   => Signal dom (Bool, Index n, a)
   -> Signal dom a
-scratchpad = mealy scratchpadT (repeat 0)
+scratchpad = mealy scratchpadT (repeat zeroBits)
 
 
 -- n: number of registers in regfile
