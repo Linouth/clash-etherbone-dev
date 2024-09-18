@@ -74,37 +74,72 @@ data SdbDevice = SdbDevice
   , deviceId    :: BitVector 32
   , version     :: Unsigned 32
   , date        :: BitVector 32
-  , name        :: Vec 19 (Unsigned 8)
+  , name        :: Vec 19 (BitVector 8)  -- String
   } deriving (Show)
 
--- sdbDevice = SdbDevice 0x0000 0x01 0x01 0 0x4 0x0 0xf 0xDEADBEEF 0xff07fc47 0x1 0x20120305 name
---   where
---     charConvert = bitCoerce . resize . pack . Char.ord
---     name = fmap charConvert $(listToVecTH "Scratchpad         ")
+sdbDevice2bv :: SdbDevice -> BitVector 477
+sdbDevice2bv SdbDevice{..}
+  =   pack abiClass ++# pack abiVerMajor ++# pack abiVerMinor ++# pack endian ++# pack width
+  ++# pack addrFirst ++# pack addrLast
+  ++# pack vendorId ++# pack deviceId ++# pack version ++# pack date ++# pack name
+
+paddedSdb :: SdbDevice -> BitVector 480
+paddedSdb x = sdbDevice2bv x ++# zeroBits
 
 
--- For now a new peripheral hard wired to 0xaabbccdd as ROM
-hardwiredRomWb :: forall dom addrWidth a .
-  (Num a, NFDataX a)
+scratchpadSdb :: SdbDevice
+scratchpadSdb = SdbDevice 0x0000 0x01 0x01 0 0x4 0x0 0xf 0xDEADBEEF 0xff07fc47 0x1 0x20120305 name
+  where
+    charConvert = bitCoerce . resize . pack . Char.ord
+    name = fmap charConvert $(listToVecTH "Scratchpad         ")
+
+-- romData :: (KnownNat n) => Vec n (BitVector 8)
+romData :: Vec 15 (BitVector 32)
+romData = unpack $ paddedSdb scratchpadSdb
+
+
+myROM :: (HiddenClockResetEnable dom, KnownNat addrWidth)
+  => Signal dom (BitVector addrWidth)
+  -> Signal dom WBWord
+myROM adr = rom (unpack <$> romData) $ unpack <$> adr
+
+myROMWb :: forall dom addrWidth a .
+  (HiddenClockResetEnable dom, a ~ WBWord, KnownNat addrWidth)
   => Circuit (Wishbone dom Standard addrWidth a) ()
-hardwiredRomWb = fromSignals circ
+myROMWb = fromSignals circ
+  where
+    circ (wb, _) = (liftA2 out dat ack, ())
+      where
+        ack = (busCycle <$> wb) .&&. (strobe <$> wb)
+        adr = addr <$> wb
+        dat = myROM $ liftA2 shiftR adr 2
+
+        out x ackn = (emptyWishboneS2M @a) { readData=x, acknowledge=ackn }
+
+
+-- For now a new peripheral hard wired to `val` as ROM
+hardwiredWb :: forall dom addrWidth a .
+  (Num a, NFDataX a)
+  => a -> Circuit (Wishbone dom Standard addrWidth a) ()
+hardwiredWb val = fromSignals circ
   where
     circ (wb, _) = (out <$> ack, ())
       where
         ack = (busCycle <$> wb) .&&. (strobe <$> wb)
-    out ack = (emptyWishboneS2M @a) { readData=0xaabbccdd, acknowledge=ack }
+    out ack = (emptyWishboneS2M @a) { readData=val, acknowledge=ack }
 
 
 myCircuit
-  :: forall dom nSlaves . (HiddenClockResetEnable dom)
-  => Circuit (Wishbone dom 'Standard 32 WBWord) (Vec 2 ())
-myCircuit = singleMasterInterconnect (0 :> 1 :> Nil) |> circuits
+  :: forall dom nSlaves . (HiddenClockResetEnable dom, KnownNat nSlaves, nSlaves ~ 2)
+  => Circuit (Wishbone dom 'Standard 32 WBWord) (Vec nSlaves ())
+myCircuit = singleMasterInterconnect (0b0 :> 0b1 :> Nil) |> circuits
   where
     scratch :: Circuit (Wishbone dom 'Standard 31 WBWord) ()
     scratch = wishboneScratchpad d4
 
-
-    circuits = vecCircuits $ scratch :> hardwiredRomWb :> Nil
+    -- circuits = vecCircuits $ scratch :> hardwiredWb 0xaabbccdd :> Nil
+    -- circuits :: (KnownNat nSlaves) => Circuit (Vec nSlaves _) (Vec nSlaves ())
+    circuits = vecCircuits $ scratch :> myROMWb :> Nil
 
 
 topEntity
