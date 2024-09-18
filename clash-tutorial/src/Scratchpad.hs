@@ -16,6 +16,7 @@ wishboneScratchpad
   , BitPack a
   , KnownNat addrWidth
   , 1 <= n
+  , 1 <= Div (BitSize a + 7) 8
   ) => SNat n -> Circuit (Wishbone dom Standard addrWidth a) ()
 wishboneScratchpad SNat = fromSignals circ
   where
@@ -30,17 +31,12 @@ wishboneScratchpad SNat = fromSignals circ
         scratchpadValue :: Signal dom a
         scratchpadValue = scratchpad $ params <$> writeEnabled <*> wb
         params we x = ( we
-                      , unpack (resize (addr x)) :: Index n
-                      -- , unpack (resize (shiftR (addr x) bitsToShift)) :: Index n
+                      , unpack (resize index) :: Index n
                       , writeData x
                       )
           where
-            -- This bit is terrible. Calculate log2 of (dataWidth/8). This is
-            -- the number of bits to to shift right.
-            -- bits = natVal (Proxy :: Proxy (BitSize a))
-            -- index = div bits 8
-            -- bitsToShift = popCount $ pack @(BitVector addrWidth) $ index-1
-            -- bitsToShift = natVal (Proxy :: Proxy (CLog 2 (BitSize a `DivRU` 8)))
+            bitsToShift = fromInteger $ natVal (Proxy :: Proxy (CLog 2 (BitSize a `DivRU` 8)))
+            index = shiftR (addr x) bitsToShift
 
         -- @a here is a type application, forcing 'dat' from 'emptyWishboneS2M'
         -- to the 'a' type in this scope (so that the NFDataX constraint is set)
