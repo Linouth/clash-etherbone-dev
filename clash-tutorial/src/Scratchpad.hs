@@ -35,6 +35,7 @@ wishboneScratchpad SNat = fromSignals circ
                       , writeData x
                       )
           where
+            -- Alt approach: snatToNum (SNat @(CLog 2 (BitSize a `DivRU` 8)))
             bitsToShift = fromInteger $ natVal (Proxy :: Proxy (CLog 2 (BitSize a `DivRU` 8)))
             index = shiftR (addr x) bitsToShift
 

@@ -80,7 +80,8 @@ common common-options
     ghc-typelits-extra,
     ghc-typelits-knownnat,
     clash-protocols,
-    clash-protocols-base
+    clash-protocols-base,
+    circuit-notation
 
 
 library
@@ -89,6 +90,7 @@ library
   exposed-modules:
     Example.Project
     Scratchpad
+    Top
   default-language: Haskell2010
 
 -- Builds the executable 'clash', with clash-tutorial project in scope

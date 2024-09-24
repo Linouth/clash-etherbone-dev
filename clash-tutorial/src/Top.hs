@@ -6,6 +6,8 @@
 {-# LANGUAGE ViewPatterns #-}
 -- {-# LANGUAGE DeriveFoldable, DeriveFunctor #-}
 
+{-# OPTIONS -fplugin=Protocols.Plugin #-}
+
 
 module Top where
 
@@ -13,11 +15,14 @@ import Data.Maybe (fromMaybe)
 import Data.Bool (bool)
 import qualified Data.List as L
 import qualified Data.Char as Char
+import Data.Proxy
 
 import Clash.Prelude
+import Clash.Annotations.TH
 import Protocols
 import Protocols.Internal
 import Protocols.Wishbone
+import Protocols.Idle
 
 import Scratchpad hiding (topEntity)
 
@@ -75,22 +80,26 @@ data SdbDevice = SdbDevice
   , version     :: Unsigned 32
   , date        :: BitVector 32
   , name        :: Vec 19 (BitVector 8)  -- String
-  } deriving (Show)
+  } deriving (Generic, Show, BitPack)
 
-sdbDevice2bv :: SdbDevice -> BitVector 477
-sdbDevice2bv SdbDevice{..}
-  =   pack abiClass ++# pack abiVerMajor ++# pack abiVerMinor ++# pack endian ++# pack width
-  ++# pack addrFirst ++# pack addrLast
-  ++# pack vendorId ++# pack deviceId ++# pack version ++# pack date ++# pack name
+-- sdbDevice2bv :: SdbDevice -> BitVector 477
+-- sdbDevice2bv SdbDevice{..}
+--   =   pack abiClass ++# pack abiVerMajor ++# pack abiVerMinor ++# pack endian ++# pack width
+--   ++# pack addrFirst ++# pack addrLast
+--   ++# pack vendorId ++# pack deviceId ++# pack version ++# pack date ++# pack name
 
 paddedSdb :: SdbDevice -> BitVector 480
-paddedSdb x = sdbDevice2bv x ++# zeroBits
+paddedSdb x = pack x ++# zeroBits
 
+-- sdbToVec :: SdbDevice -> Vec 15 (BitVector 32)
+-- sdbToVec SdbDevice{..} = 
+
+charConvert :: Char -> BitVector 8
+charConvert = bitCoerce . resize . pack . Char.ord
 
 scratchpadSdb :: SdbDevice
 scratchpadSdb = SdbDevice 0x0000 0x01 0x01 0 0x4 0x0 0xf 0xDEADBEEF 0xff07fc47 0x1 0x20120305 name
   where
-    charConvert = bitCoerce . resize . pack . Char.ord
     name = fmap charConvert $(listToVecTH "Scratchpad         ")
 
 -- romData :: (KnownNat n) => Vec n (BitVector 8)
@@ -128,30 +137,55 @@ hardwiredWb val = fromSignals circ
         ack = (busCycle <$> wb) .&&. (strobe <$> wb)
     out ack = (emptyWishboneS2M @a) { readData=val, acknowledge=ack }
 
+instance (IdleCircuit a, KnownNat n) => IdleCircuit (Vec n a) where
+  idleFwd _ = repeat $ idleFwd (Proxy @a)
+  idleBwd _ = repeat $ idleBwd (Proxy @a)
+
+
+instance IdleCircuit () where
+  idleFwd _ = ()
+  idleBwd _ = ()
 
 myCircuit
-  :: forall dom nSlaves . (HiddenClockResetEnable dom, KnownNat nSlaves, nSlaves ~ 2)
-  => Circuit (Wishbone dom 'Standard 32 WBWord) (Vec nSlaves ())
-myCircuit = singleMasterInterconnect (0b0 :> 0b1 :> Nil) |> circuits
+  :: forall dom . (HiddenClockResetEnable dom)
+  => Circuit (Wishbone dom 'Standard 32 WBWord) ()
+myCircuit = singleMasterInterconnect (0b0 :> 0b1 :> Nil) |> circuits |> idleSink 
+  where
+    -- dropUnits = mapCircuit id id (const ()) (const $ repeat ())
+
+    scratch :: Circuit (Wishbone dom 'Standard 31 WBWord) ()
+    scratch = wishboneScratchpad d4
+
+    circuits = vecCircuits $ scratch :> myROMWb :> Nil
+
+
+myCircuit2
+  :: forall dom . (HiddenClockResetEnable dom)
+  => Circuit (Wishbone dom 'Standard 32 WBWord) ()
+myCircuit2 =
+  circuit $ \wbm -> do
+  [wb1, wb2] <- singleMasterInterconnect @_ @_ @32 (0b0 :> 0b1 :> Nil) -< wbm
+  scratch -< wb1
+  myROMWb -< wb2
   where
     scratch :: Circuit (Wishbone dom 'Standard 31 WBWord) ()
     scratch = wishboneScratchpad d4
 
-    -- circuits = vecCircuits $ scratch :> hardwiredWb 0xaabbccdd :> Nil
-    -- circuits :: (KnownNat nSlaves) => Circuit (Vec nSlaves _) (Vec nSlaves ())
-    circuits = vecCircuits $ scratch :> myROMWb :> Nil
-
 
 topEntity
-  :: Clock System
-  -> Reset System
-  -> Enable System
-  -> Fwd (Wishbone System Standard 32 WBWord)
-  -> Bwd (Wishbone System Standard 32 WBWord)
+  :: "clk"  ::: Clock System
+  -> "rstn" ::: Reset System
+  -> "en"   ::: Enable System
+  -> "wb_i" ::: Fwd (Wishbone System Standard 32 WBWord)
+  -> "wb_o" ::: Bwd (Wishbone System Standard 32 WBWord)
 topEntity clk rst en = fn
   where
-    fn x = fst $ toSignals circ (x, repeat ())
+    fn x = fst $ toSignals circ (x, ())
     circ = exposeClockResetEnable myCircuit clk rst en
+
+
+-- simMyCircuit :: _
+-- simMyCircuit = simulateCS myCircuit []
 
 
 -- Function / types below taken from Bittide
@@ -238,3 +272,6 @@ updateM2SAddr ::
   WishboneM2S addressWidthOld selWidth dat ->
   WishboneM2S addressWidthNew selWidth dat
 updateM2SAddr newAddr WishboneM2S{..} = WishboneM2S{addr = newAddr, ..}
+
+
+makeTopEntity 'topEntity
