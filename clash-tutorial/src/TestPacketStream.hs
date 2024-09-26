@@ -7,37 +7,15 @@ import Data.Bifunctor as B
 import Data.Maybe
 
 import Clash.Prelude
+import Clash.Annotations.TH
 
 import Protocols
 import Protocols.PacketStream
 import Protocols.PacketStream.Base
+import Protocols.Wishbone
 import Protocols.Idle
 -- import Protocols.Internal
 -- import Protocols.Wishbone
-
-
-
-printerC :: (KnownDomain dom, ShowX meta) => Circuit (PacketStream dom dataWidth meta) ()
-printerC = fromSignals go
-  where
-    -- go (s,_) = {- trace (showX $ sample_lazy s) -} (pure (PacketStreamS2M True), ())
-    go (s,_) = seq (printX $ sample_lazy s) (pure (PacketStreamS2M True), ())
-    -- go (s,_) = seq (traceSignal1 "test" $ _data <$> (trac <$> s)) (pure (PacketStreamS2M True), ())
-    --
-    -- trac Nothing  = ()
-    -- trac (Just s) = s
-
-
-
-
-foo :: Circuit a () -> Fwd a -> Bwd a
-foo c = go
-  where
-    go x = fst $ toSignals c (x, ())
-
-
-tmp :: [Maybe (PacketStreamM2S 4 ())]
-tmp = [Nothing, Just $ PacketStreamM2S (0:>0:>0:>0:>Nil) (Nothing) () False, Just $ PacketStreamM2S (1:>1:>1:>1:>Nil) (Just 3) () False]
 
 
 config :: SimulationConfig
@@ -47,21 +25,21 @@ data EBHeader = EBHeader
   { _magic    :: Unsigned 16
   , _version  :: Unsigned 4
   , _res      :: Bit
-  , _nr       :: Bit
-  , _pr       :: Bit
-  , _pf       :: Bit
+  , _nr       :: Bool
+  , _pr       :: Bool
+  , _pf       :: Bool
   , _addrSize :: BitVector 4
   , _portSize :: BitVector 4
   } deriving (Generic, BitPack, NFDataX, Show, ShowX)
 
 data RecordHeader = RecordHeader
-  { _bca    :: Bit
-  , _rca    :: Bit
-  , _rff    :: Bit
+  { _bca    :: Bool
+  , _rca    :: Bool
+  , _rff    :: Bool
   , _res0   :: Bit
-  , _cyc    :: Bit
-  , _wca    :: Bit
-  , _wff    :: Bit
+  , _cyc    :: Bool
+  , _wca    :: Bool
+  , _wff    :: Bool
   , _res1   :: Bit
   , _byteEn :: BitVector 8
   , _wCount :: Unsigned 8
@@ -69,6 +47,7 @@ data RecordHeader = RecordHeader
   } deriving (Generic, BitPack, NFDataX, Show, ShowX)
 
 
+-- Extract EBHeader data from stream into metadata
 etherboneDepacketizerC
  :: (HiddenClockResetEnable dom, KnownNat dataWidth, 1 <= dataWidth)
  => Circuit (PacketStream dom dataWidth ()) (PacketStream dom dataWidth EBHeader)
@@ -76,6 +55,7 @@ etherboneDepacketizerC = depacketizerC @_ metaMap
   where metaMap hdr _ = hdr
 
 
+-- Concat EBHeader metadata into data stream
 -- This adds a cycle latency!
 etherbonePacketizerC
   :: (HiddenClockResetEnable dom, KnownNat dataWidth, 1 <= dataWidth)
@@ -83,6 +63,7 @@ etherbonePacketizerC
 etherbonePacketizerC = packetizerC (const ()) id
 
 
+-- Extract RecordHeader data from stream into metadata
 -- We can drop EBHeader. All info in here is static and known
 recordDepacketizerC
   :: (HiddenClockResetEnable dom, KnownNat dataWidth, 1 <= dataWidth)
@@ -90,6 +71,8 @@ recordDepacketizerC
 recordDepacketizerC = depacketizerC metaMap
   where metaMap hdr _ = hdr
 
+-- Concat RecordHeader metadata back into data stream
+-- Header is moddified to map to a response record (e.g. WCount = RCount)
 recordPacketizerC
   :: (HiddenClockResetEnable dom, KnownNat dataWidth, 1 <= dataWidth)
  => Circuit (PacketStream dom dataWidth RecordHeader) (PacketStream dom dataWidth EBHeader)
@@ -98,16 +81,16 @@ recordPacketizerC = packetizerC (const ebHeader) metaHeaderMap
     ebHeader = EBHeader { _magic    = 0x4e6f
                         , _version  = 1
                         , _res      = undefined
-                        , _nr       = 1
-                        , _pr       = 0
-                        , _pf       = 0
+                        , _nr       = True
+                        , _pr       = False
+                        , _pf       = False
                         , _addrSize = 0b0100
                         , _portSize = 0b0100
                         }
 
-    metaHeaderMap m = m { _bca = 0
-                        , _rca = 0
-                        , _rff = 0
+    metaHeaderMap m = m { _bca = False
+                        , _rca = False
+                        , _rff = False
                         , _wca = _bca m
                         , _wff = _rff m
                         , _rCount = 0
@@ -115,6 +98,7 @@ recordPacketizerC = packetizerC (const ebHeader) metaHeaderMap
                         }
 
 
+-- TODO: Use Enum (with one-hot encoding) for addrWidth and portWidth
 data Size = B8 | B16 | B32 | B64 deriving (Generic, Eq, BitPack)
 
 
@@ -131,7 +115,7 @@ receiverC = packetDispatcherC (probePred :> recordPred :> Nil)
     validAddr     = (/= 0) . (.&. 0b0100) . _addrSize
     validPort     = (/= 0) . (.&. 0b0100) . _portSize
 
-    isProbe       = bitToBool . _pf
+    isProbe       = _pf
 
     probePred m = isValid m && isProbe m
     recordPred = isValid
@@ -140,27 +124,26 @@ receiverC = packetDispatcherC (probePred :> recordPred :> Nil)
     -- invalidPred = 
 
 
--- Probe packet _always_ padded to max alignment. Only header and no records
+-- Handle probe records. Header flags set correctly and probe-id is passed
+-- through automatically.
+-- Probe is packet _always_ padded to max alignment. Only header and no records
 probeHandlerC :: Circuit
   (PacketStream dom dataWidth EBHeader)
   (PacketStream dom dataWidth EBHeader)
 probeHandlerC = mapMeta metaMap
   where
-    metaMap m = m { _pf = low, _pr = high }
+    metaMap m = m { _pf = False, _pr = True }
 
 
--- TODO: Write custom arbiter that selects the bus with Justs instead of Maybes
--- (Essentiall foldMaybe?)
+-- 'Cheap' arbiter, making use of the fact that there is always only one input
+-- stream with data.
+-- TODO: Check if this is working correctly. I expect it to fail, as the record
+-- path has more latency than the probe path. If there is a probe and record
+-- packet directly after each-other this might cause issues in the Bwd channel.
 packetMuxC :: forall n dom dataWidth meta. (KnownNat n, 1 <= n) =>
   Circuit (Vec n (PacketStream dom dataWidth meta)) (PacketStream dom dataWidth meta)
--- packetMuxC = Circuit (B.first unbundle . go . B.first bundle)
 packetMuxC = Circuit (B.first unbundle . go . B.first bundle)
   where
--- _ :: (Signal
---    dom (Vec (Any + 1) (Maybe (PacketStreamM2S dataWidth meta))),
---  Signal dom PacketStreamS2M)
--- -> (Signal dom (Vec n PacketStreamS2M),
-    -- Signal dom (Maybe (PacketStreamM2S dataWidth meta)))
     go :: (Signal dom (Vec n (Maybe (PacketStreamM2S dataWidth meta))),
            Signal dom PacketStreamS2M)
           -> (Signal dom (Vec n PacketStreamS2M),
@@ -171,6 +154,24 @@ packetMuxC = Circuit (B.first unbundle . go . B.first bundle)
         fwd  = fold @(n-1) (<|>) <$> fwds
 
 
+cycExportC :: Circuit (PacketStream dom dataWidth RecordHeader)
+                      (PacketStream dom dataWidth RecordHeader
+                      , CSignal dom (Maybe Bool))
+cycExportC = Circuit go
+  where 
+    go (fwd, (bwd, _)) = (bwd, (fwd, cycBit <$> fwd))
+
+    cycBit :: Maybe (PacketStreamM2S dataWidth RecordHeader) -> Maybe Bool
+    cycBit Nothing  = Nothing
+    cycBit (Just x)
+      -- | _wCount hdr == 0 && _rCount hdr == 0 = Nothing
+      | (_wCount hdr .|. _rCount hdr) == 0 = Nothing
+      | otherwise = Just $ _cyc hdr
+        where hdr = _meta x
+
+
+
+-- This circuit prints all data that goes through it. Useful for debugging.
 traceC :: forall dom dataWidth meta .
   (HiddenClockResetEnable dom, Show meta)
   => String
@@ -186,10 +187,26 @@ traceC name = Circuit go
     printf dir f c = trace (dir <> " " <> show c <> " " <> name <> " " <> ": " <> show f) f
 
 
-testCircuit
+-- slave
+--   :: Circuit ()
+--              (Wishbone dom Standard 32 (BitVector dataWidth))
+--   -> Circuit (PacketStream dom dataWidth RecordHeader)
+--              (PacketStream dom dataWidth RecordHeader)
+-- -- slave = id
+
+recordHandlerC :: Circuit
+  (PacketStream dom dataWidth RecordHeader)
+  (PacketStream dom dataWidth RecordHeader)
+recordHandlerC = mapMeta metaMap
+  where
+    metaMap m = m { _wCount = _wCount m + 1 }
+
+
+-- Final circuit
+myCircuit
   :: (HiddenClockResetEnable dom, KnownNat dataWidth, 1 <= dataWidth)
   => Circuit (PacketStream dom dataWidth ()) (PacketStream dom dataWidth ())
-testCircuit = circuit $ \pm -> do
+myCircuit = circuit $ \pm -> do
   ebpkt <- etherboneDepacketizerC -< pm
 
   -- Filters out invalid, probe and record packets
@@ -198,12 +215,12 @@ testCircuit = circuit $ \pm -> do
   -- The `record` branch is consumed and thrown out
   -- consume <| traceC "Record" -< record
   
-  rdpkt <- traceC "RecordOut" <| recordDepacketizerC <| traceC "RecordIn" -< record
+  rdpkt <- traceC "RecordOut" <| recordHandlerC <| recordDepacketizerC <| traceC "RecordIn" -< record
   rpkt <- recordPacketizerC -< rdpkt
 
   probeOut <- probeHandlerC -< probe
 
-  resp <- packetMuxC -< [probeOut, rpkt]
+  resp <- packetMuxC -< [rpkt, probeOut] -- Bias towards first entry
 
   etherbonePacketizerC -< resp
   -- etherbonePacketizerC -< ebpkt
@@ -234,18 +251,19 @@ streamInput =
   ]
 
 
-
-myCircuit :: forall dom. (HiddenClockResetEnable dom) => Circuit (PacketStream dom 4 ()) ()
-myCircuit = (etherboneDepacketizerC @dom) |> etherbonePacketizerC |> idleSink
-
-
 topEntity
   :: "clk"  ::: Clock System
   -> "rstn" ::: Reset System
   -> "en"   ::: Enable System
   -> "inp" ::: Signal System (Maybe (PacketStreamM2S 4 ()))
-  -> "out" ::: Signal System PacketStreamS2M
+  -> "out" ::: Signal System (Maybe (PacketStreamM2S 4 ()))
 topEntity clk rst en = fn
   where
-    fn x = fst $ toSignals circ (x, ())
+    fn x = snd $ toSignals circ (x, pure $ PacketStreamS2M True)
     circ = exposeClockResetEnable myCircuit clk rst en
+
+
+-- Simulate with
+-- mapM_ print $ L.take 32 $ simulateC (withClockResetEnable @System clockGen resetGen enableGen (myCircuit)) config streamInput
+
+makeTopEntity 'topEntity

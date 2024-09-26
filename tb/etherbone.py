@@ -308,7 +308,8 @@ async def test_ack_on_rx(dut):
     assert(dut.rx_ack_o.value == 1)
 
 
-@cocotb.test(skip=True)
+# @cocotb.test(skip=True)
+@cocotb.test(skip=False)
 async def test_socket(dut):
     log = logger.getChild('Socket')
     eb_dut = EtherboneDUT(dut, log=log)
