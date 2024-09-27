@@ -194,17 +194,87 @@ traceC name = Circuit go
 --              (PacketStream dom dataWidth RecordHeader)
 -- -- slave = id
 
-recordHandlerC :: Circuit
-  (PacketStream dom dataWidth RecordHeader)
-  (PacketStream dom dataWidth RecordHeader)
-recordHandlerC = mapMeta metaMap
+-- data WishboneMasterState = WaitForRecord | WriteAddr | Write | ReadAddr | Read
+data WishboneMasterState (addrWidth :: Nat)
+  = WaitForRecord
+  | Write { _addr :: Maybe (BitVector addrWidth)}
+  | Read  { _addr :: Maybe (BitVector addrWidth)}
+  deriving (Generic, Show, ShowX)
+
+-- TODO: Write WBM block
+-- wishboneMasterT
+--   :: WishboneMasterState addrWidth
+--   -> (Maybe (PacketStreamM2S dataWidth EBHeader), PacketStreamS2M)
+--   -> ( WishboneMasterState addrWidth
+--      , (PacketStreamS2M, Maybe (PacketStreamM2S dataWidth RecordHeader))
+--      )
+--
+-- wishboneMaster
+--   :: Circuit (PacketStream dom dataWidth meta)
+--              (PacketStream dom dataWidth meta
+--              , Wishbone dom Standard 32 (BitVector dataWidth))
+-- wishboneMaster = id
+
+-- For now, only 32 and 64 bit.
+--
+-- NOTE: Almost done. Need to watch backpressure. If it is not true, keep
+-- everything as it is.
+recordInserterC
+  :: forall dom dataWidth .
+  (HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth)
+  => Circuit (PacketStream dom dataWidth RecordHeader)
+             (PacketStream dom dataWidth EBHeader)
+recordInserterC = Circuit go
   where
-    metaMap m = m { _wCount = _wCount m + 1 }
+    go (fwd, bwd) = (bwd, mealyB insertT False (fwd, bwd))
+    
+    insertT
+      :: Bool
+      -> (Maybe (PacketStreamM2S dataWidth RecordHeader), PacketStreamS2M)
+      -> (Bool, Maybe (PacketStreamM2S dataWidth EBHeader))
+    insertT s     (Nothing, _)      = (s,  Nothing)
+    insertT False (Just f,  _)
+      | _wCount (_meta f) == 0  = case _last f of
+        Nothing   -> (True,  Just $ insert f)
+        -- Special case. If it should be inserted, and this is the last piece of
+        -- the packet, the state should stay False.
+        Just _    -> (False, Just $ insert f)
+      | otherwise               = (False, Just $ ebMeta f)
+    insertT True  (Just f,  _)
+      | isJust (_last f)        = (False, Just $ ebMeta f)
+      | otherwise               = (True,  Just $ ebMeta f)
+
+    ebMeta  f = f { _meta = ebHeader }
+    insert  f = ebMeta f { _data = bitCoerce (metaBits ++# zeroPadding) }
+      where
+        zeroPadding :: BitVector (dataWidth * 8 - BitSize RecordHeader)
+        zeroPadding = zeroBits
+        metaBits = pack $ recordMetaMap $ _meta f
+
+    ebHeader = EBHeader { _magic     = 0x4e6f
+                        , _version   = 1
+                        , _res       = 0
+                        , _nr        = True
+                        , _pr        = False
+                        , _pf        = False
+                        , _addrSize  = width
+                        , _portSize  = width
+                        }
+      where width = snatToNum (SNat @dataWidth)
+
+    recordMetaMap m = m { _bca = False
+                        , _rca = False
+                        , _rff = False
+                        , _wca = _bca m
+                        , _wff = _rff m
+                        , _rCount = 0
+                        , _wCount = _rCount m
+                        }
 
 
 -- Final circuit
 myCircuit
-  :: (HiddenClockResetEnable dom, KnownNat dataWidth, 1 <= dataWidth)
+  :: (HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth)
   => Circuit (PacketStream dom dataWidth ()) (PacketStream dom dataWidth ())
 myCircuit = circuit $ \pm -> do
   ebpkt <- etherboneDepacketizerC -< pm
@@ -215,8 +285,8 @@ myCircuit = circuit $ \pm -> do
   -- The `record` branch is consumed and thrown out
   -- consume <| traceC "Record" -< record
   
-  rdpkt <- traceC "RecordOut" <| recordHandlerC <| recordDepacketizerC <| traceC "RecordIn" -< record
-  rpkt <- recordPacketizerC -< rdpkt
+  rdpkt <- traceC "RecordOut" <| recordDepacketizerC <| traceC "RecordIn" -< record
+  rpkt <- traceC "InserterOut" <| recordInserterC -< rdpkt
 
   probeOut <- probeHandlerC -< probe
 
@@ -241,9 +311,20 @@ streamInput =
   , packet False $ Just 0xe80f0000
   , packet False $ Just 0xcc
   , packet False $ Just 0xdd
+  , packet True  $ Just 0x00
+  , Nothing
+  , packet False $ Just 0x4e6f1044
+  , packet False $ Just 0xe80f0000
+  , packet False $ Just 0xcc
+  , packet True  $ Just 0xdd
+  , Nothing
+  , packet False $ Just 0x4e6f1044
+  , packet False $ Just 0xe80f0100
+  , packet False $ Just 0xcc
+  , packet True  $ Just 0xdd
   , Nothing
   , packet True $ Just 0x00
-  , Nothing
+  , packet True $ Just 0x00
   , packet False $ Just 0x4e6f1144
   , packet False $ Just 0xbb
   , packet False $ Just 0xcc
