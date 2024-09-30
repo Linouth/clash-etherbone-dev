@@ -1,4 +1,5 @@
 {-# OPTIONS -fplugin=Protocols.Plugin #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module TestPacketStream where
 
@@ -197,8 +198,8 @@ traceC name = Circuit go
 -- data WishboneMasterState = WaitForRecord | WriteAddr | Write | ReadAddr | Read
 data WishboneMasterState (addrWidth :: Nat)
   = WaitForRecord
-  | Write { _addr :: Maybe (BitVector addrWidth)}
-  | Read  { _addr :: Maybe (BitVector addrWidth)}
+  | Write { _addr :: Maybe (BitVector addrWidth) }
+  | Read  { _addr :: Maybe (BitVector addrWidth) }
   deriving (Generic, Show, ShowX)
 
 -- TODO: Write WBM block
@@ -215,41 +216,45 @@ data WishboneMasterState (addrWidth :: Nat)
 --              , Wishbone dom Standard 32 (BitVector dataWidth))
 -- wishboneMaster = id
 
+data RecordInserterState (dataWidth :: Nat) = RecordInserterState
+  { _inserted   :: Bool
+  , _prevStream :: Maybe (PacketStreamM2S dataWidth EBHeader)
+  } deriving (Generic, NFDataX)
+
+
 -- For now, only 32 and 64 bit.
---
--- NOTE: Almost done. Need to watch backpressure. If it is not true, keep
--- everything as it is.
 recordInserterC
   :: forall dom dataWidth .
-  (HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth)
+  (HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth, dataWidth~4)
   => Circuit (PacketStream dom dataWidth RecordHeader)
              (PacketStream dom dataWidth EBHeader)
 recordInserterC = Circuit go
   where
     go (fwd, bwd) = (bwd, mealyB insertT False (fwd, bwd))
-    
+
     insertT
       :: Bool
       -> (Maybe (PacketStreamM2S dataWidth RecordHeader), PacketStreamS2M)
       -> (Bool, Maybe (PacketStreamM2S dataWidth EBHeader))
-    insertT s     (Nothing, _)      = (s,  Nothing)
-    insertT False (Just f,  _)
-      | _wCount (_meta f) == 0  = case _last f of
-        Nothing   -> (True,  Just $ insert f)
-        -- Special case. If it should be inserted, and this is the last piece of
-        -- the packet, the state should stay False.
-        Just _    -> (False, Just $ insert f)
-      | otherwise               = (False, Just $ ebMeta f)
-    insertT True  (Just f,  _)
-      | isJust (_last f)        = (False, Just $ ebMeta f)
-      | otherwise               = (True,  Just $ ebMeta f)
+    insertT s     (Nothing, _)    = (s, Nothing)
+    insertT False (Just f,  b)
+      | _wCount (_meta f) == 0    = case _last f of
+        Nothing                  -> (_ready b, Just $ insert f)
+        Just _                   -> (False,    Just $ insert f)
+      | otherwise                 = (False,    Just $ ebMeta f)
+    insertT True  (Just f,  b)
+      | isJust (_last f)          = (not $ _ready b, Just $ ebMeta f)
+      | otherwise                 = (True,           Just $ ebMeta f)
 
     ebMeta  f = f { _meta = ebHeader }
+    -- insert  f = ebMeta f { _data = bitCoerce (0 :: BitVector 32) }
     insert  f = ebMeta f { _data = bitCoerce (metaBits ++# zeroPadding) }
       where
         zeroPadding :: BitVector (dataWidth * 8 - BitSize RecordHeader)
         zeroPadding = zeroBits
         metaBits = pack $ recordMetaMap $ _meta f
+        -- dataVec :: Vec dataWidth (BitVector 8)
+        -- dataVec = bitCoerce metaBits ++ repeat 0
 
     ebHeader = EBHeader { _magic     = 0x4e6f
                         , _version   = 1
@@ -272,9 +277,20 @@ recordInserterC = Circuit go
                         }
 
 
+recordHandlerC = mapMeta fn
+  where fn _ = EBHeader { _magic     = 0x4e6f
+                        , _version   = 0b1111
+                        , _res       = 0
+                        , _nr        = True
+                        , _pr        = False
+                        , _pf        = False
+                        , _addrSize  = 0b0100
+                        , _portSize  = 0b0100
+                        }
+
 -- Final circuit
 myCircuit
-  :: (HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth)
+  :: (HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth, dataWidth~4)
   => Circuit (PacketStream dom dataWidth ()) (PacketStream dom dataWidth ())
 myCircuit = circuit $ \pm -> do
   ebpkt <- etherboneDepacketizerC -< pm
@@ -287,6 +303,7 @@ myCircuit = circuit $ \pm -> do
   
   rdpkt <- traceC "RecordOut" <| recordDepacketizerC <| traceC "RecordIn" -< record
   rpkt <- traceC "InserterOut" <| recordInserterC -< rdpkt
+  -- rpkt <- traceC "InserterOut" <| recordPacketizerC -< rdpkt
 
   probeOut <- probeHandlerC -< probe
 
@@ -295,6 +312,56 @@ myCircuit = circuit $ \pm -> do
   etherbonePacketizerC -< resp
   -- etherbonePacketizerC -< ebpkt
 
+{-
+  With recordHandlerC
+   Number of wires:                351
+   Number of wire bits:           7036
+   Number of public wires:         351
+   Number of public wire bits:    7036
+   Number of ports:                  5
+   Number of port bits:             77
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:                225
+     L6MUX21                        10
+     LUT4                          124
+     PFUMX                          21
+     TRELLIS_FF                     70
+
+  With recordInserterC
+   Number of wires:                712
+   Number of wire bits:           8035
+   Number of public wires:         712
+   Number of public wire bits:    8035
+   Number of ports:                  5
+   Number of port bits:             77
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:                630
+     L6MUX21                        76
+     LUT4                          335
+     PFUMX                         119
+     TRELLIS_FF                    100
+
+  With recordPacketizerC
+   Number of wires:                477
+   Number of wire bits:           8708
+   Number of public wires:         477
+   Number of public wire bits:    8708
+   Number of ports:                  5
+   Number of port bits:             77
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:                386
+     L6MUX21                         7
+     LUT4                          213
+     PFUMX                          50
+     TRELLIS_FF                    116
+
+-}
 
 packet :: Bool -> Maybe (BitVector 32) -> Maybe (PacketStreamM2S 4 ())
 packet _ Nothing  = Nothing
@@ -308,7 +375,7 @@ streamInput =
   , packet True  $ Just 0x00000086
   , Nothing
   , packet False $ Just 0x4e6f1044
-  , packet False $ Just 0xe80f0000
+  , packet False $ Just 0xe80f0100
   , packet False $ Just 0xcc
   , packet False $ Just 0xdd
   , packet True  $ Just 0x00
