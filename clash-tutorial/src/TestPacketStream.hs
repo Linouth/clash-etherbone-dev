@@ -305,6 +305,9 @@ wishboneMasterT st@Read{..} (Just x, PacketStreamS2M{_ready})
 
 -- Reason for receiving the header in the state machine is so that we can send
 -- zeros that word. The depacketizer sends Nothing the cycle of the header. 
+--
+-- For now addrWidth ~ 32 because there is not wishbone bus connected yet, which
+-- sould dictate the width.
 wishboneMasterC
   :: forall dom dataWidth addrWidth .
   ( HiddenClockResetEnable dom
@@ -317,7 +320,16 @@ wishboneMasterC
   => Circuit (PacketStream dom dataWidth EBHeader)
              (PacketStream dom dataWidth RecordHeader)
              -- , Wishbone dom Standard 32 (BitVector dataWidth))
-wishboneMasterC = Circuit $ mealyB (wishboneMasterT @_ @addrWidth) WaitForRecord
+wishboneMasterC = Circuit $ fsm
+  where
+    fsm (fwd, bwd) = mealyB (wishboneMasterT @_ @addrWidth) WaitForRecord
+      (seq (tr fwd) fwd, bwd)
+    tr f = traceSignal1 "" $ foo <$> f
+
+
+foo :: (KnownNat dataWidth) => Maybe (PacketStreamM2S dataWidth meta) -> BitVector (dataWidth * 8)
+foo Nothing  = oneBits
+foo (Just x) = bitCoerce $ _data x
 
 
 data RecordInserterState (dataWidth :: Nat) = RecordInserterState
@@ -517,3 +529,15 @@ topEntity clk rst en = fn
 -- mapM_ print $ L.take 32 $ simulateC (withClockResetEnable @System clockGen resetGen enableGen (myCircuit)) config streamInput
 
 makeTopEntity 'topEntity
+
+
+-- main :: IO ()
+-- main = do
+--   let sim = exposeClockResetEnable simulateC systemClockGen systemResetGen enableGen myCircuit config streamInput
+--   -- let  = exposeClockResetEnable mainCounter systemClockGen systemResetGen enableGen
+--   vcd <- dumpVCD (0, 100) sim ["main", "sub"]
+--   case vcd of
+--     Left msg ->
+--       error msg
+--     Right contents ->
+--       writeFile "mainCounter.vcd" contents
