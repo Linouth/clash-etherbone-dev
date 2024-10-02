@@ -133,7 +133,10 @@ probeHandlerC :: Circuit
   (PacketStream dom dataWidth EBHeader)
 probeHandlerC = mapMeta metaMap
   where
-    metaMap m = m { _pf = False, _pr = True }
+    metaMap m = m { _pf = False, _pr = True
+                  , _addrSize = _addrSize m .&. 0b0100
+                  , _portSize = _portSize m .&. 0b0100
+                  }
 
 
 -- 'Cheap' arbiter, making use of the fact that there is always only one input
@@ -197,30 +200,130 @@ traceC name = Circuit go
 
 -- data WishboneMasterState = WaitForRecord | WriteAddr | Write | ReadAddr | Read
 data WishboneMasterState (addrWidth :: Nat)
+  -- TODO: Aborted
   = WaitForRecord
-  | Write { _addr :: Maybe (BitVector addrWidth) }
-  | Read  { _addr :: Maybe (BitVector addrWidth) }
-  deriving (Generic, Show, ShowX)
+
+  | Write { _metaOut :: RecordHeader
+          , _addr :: Maybe (BitVector addrWidth)
+          }
+
+  | Read  { _metaOut :: RecordHeader
+          , _addr :: Maybe (BitVector addrWidth)
+          }
+  deriving (Generic, Show, ShowX, NFDataX)
 
 -- TODO: Write WBM block
--- wishboneMasterT
---   :: WishboneMasterState addrWidth
---   -> (Maybe (PacketStreamM2S dataWidth EBHeader), PacketStreamS2M)
---   -> ( WishboneMasterState addrWidth
---      , (PacketStreamS2M, Maybe (PacketStreamM2S dataWidth RecordHeader))
---      )
+-- NOTE: With a moore, the bwd=False situation can be simplified greatly, since
+-- the output would be stored in the state. 
 --
--- wishboneMaster
---   :: Circuit (PacketStream dom dataWidth meta)
---              (PacketStream dom dataWidth meta
---              , Wishbone dom Standard 32 (BitVector dataWidth))
--- wishboneMaster = id
+-- This currently fails if there is is more data in the packet than the FSM
+-- expects. Failure is alright, but it dead-locks. Thats not okay. Maybe watch
+-- for a new packet and reset the fsm.
+wishboneMasterT
+  :: forall dataWidth addrWidth .
+  ( KnownNat dataWidth
+  , KnownNat addrWidth
+  , 4 <= dataWidth
+  , DivRU addrWidth 8 <= dataWidth
+  , DivRU addrWidth 8 * 8 ~ addrWidth)
+  => WishboneMasterState addrWidth
+  -> (Maybe (PacketStreamM2S dataWidth EBHeader), PacketStreamS2M)
+  -> ( WishboneMasterState addrWidth
+     , (PacketStreamS2M, Maybe (PacketStreamM2S dataWidth RecordHeader))
+     )
+wishboneMasterT state (Nothing, bwd) = (state, (bwd, Nothing))
+wishboneMasterT WaitForRecord (Just x, PacketStreamS2M{_ready})
+  = (nextState, (PacketStreamS2M _ready, Just out))
+  where
+    headerVec = takeI @4 @(dataWidth - 4) (_data x)
+    meta :: RecordHeader
+    meta = unpack $ bitCoerce headerVec
+
+    out = PacketStreamM2S { _data = repeat 0
+                          , _last = _last x
+                          , _meta = meta
+                          , _abort = _abort x}
+
+    nextState
+      | not _ready        = WaitForRecord
+      | _wCount meta > 0  = trace ("Write " <> show (_data x))  Write meta Nothing
+      | _rCount meta > 0  = Read meta Nothing
+      | otherwise         = WaitForRecord
+wishboneMasterT st@Write{..} (Just x, PacketStreamS2M{_ready})
+  = (nextState, (PacketStreamS2M ready, Just out))
+  where
+    -- TODO: Check wishbone response (and with ack?)
+    ready = _ready 
+    ack = True
+    out = PacketStreamM2S { _data = repeat 0
+                          , _last = _last x
+                          , _meta = meta
+                          , _abort = _abort x
+                          }
+
+    meta
+      | isNothing _addr       = _metaOut
+      | ack && isJust _addr   = _metaOut { _wCount = _wCount _metaOut - 1 }
+      | otherwise             = _metaOut
+
+    nextState
+      | not ready             = st
+      | _wCount meta == 0     = trace "count0" (if _rCount meta > 0
+        then trace "w>r" Read meta Nothing
+        else trace "w>wfr" WaitForRecord)
+      | isNothing _addr       = trace "noAddr" Write meta (Just addr)
+      | otherwise             = trace "other" Write meta _addr
+
+    addrBytes :: Vec (DivRU addrWidth 8) (BitVector 8)
+    addrBytes = takeI @_ @(dataWidth - DivRU addrWidth 8) (_data x)
+    addr :: BitVector addrWidth
+    addr = bitCoerce addrBytes
+wishboneMasterT st@Read{..} (Just x, PacketStreamS2M{_ready})
+  = (nextState, (PacketStreamS2M ready, out))
+  where
+    ready = _ready
+
+    out
+      | not ready = Nothing
+      | otherwise = Just PacketStreamM2S { _data = bitCoerce (0xaabbccdd :: BitVector 32) ++ repeat 0
+                                         , _last = _last x
+                                         , _meta = _metaOut
+                                         , _abort = _abort x
+                                         }
+
+    nextState
+      | not ready       = st
+      | isNothing _addr = Read _metaOut (Just addr)
+      | otherwise       = st
+
+    addrBytes :: Vec (DivRU addrWidth 8) (BitVector 8)
+    addrBytes = takeI (_data x)
+    addr :: BitVector addrWidth
+    addr = bitCoerce addrBytes
+
+
+
+-- Reason for receiving the header in the state machine is so that we can send
+-- zeros that word. The depacketizer sends Nothing the cycle of the header. 
+wishboneMasterC
+  :: forall dom dataWidth addrWidth .
+  ( HiddenClockResetEnable dom
+  , KnownNat dataWidth
+  , KnownNat addrWidth
+  , addrWidth ~ 32
+  , 4 <= dataWidth
+  , DivRU addrWidth 8 <= dataWidth
+  , DivRU addrWidth 8 * 8 ~ addrWidth)
+  => Circuit (PacketStream dom dataWidth EBHeader)
+             (PacketStream dom dataWidth RecordHeader)
+             -- , Wishbone dom Standard 32 (BitVector dataWidth))
+wishboneMasterC = Circuit $ mealyB (wishboneMasterT @_ @addrWidth) WaitForRecord
+
 
 data RecordInserterState (dataWidth :: Nat) = RecordInserterState
   { _inserted   :: Bool
   , _prevStream :: Maybe (PacketStreamM2S dataWidth EBHeader)
   } deriving (Generic, NFDataX)
-
 
 -- For now, only 32 and 64 bit.
 recordInserterC
@@ -248,13 +351,9 @@ recordInserterC = Circuit go
 
     ebMeta  f = f { _meta = ebHeader }
     -- insert  f = ebMeta f { _data = bitCoerce (0 :: BitVector 32) }
-    insert  f = ebMeta f { _data = bitCoerce (metaBits ++# zeroPadding) }
+    insert  f = ebMeta f { _data = bitCoerce metaBits ++ repeat 0 }
       where
-        zeroPadding :: BitVector (dataWidth * 8 - BitSize RecordHeader)
-        zeroPadding = zeroBits
         metaBits = pack $ recordMetaMap $ _meta f
-        -- dataVec :: Vec dataWidth (BitVector 8)
-        -- dataVec = bitCoerce metaBits ++ repeat 0
 
     ebHeader = EBHeader { _magic     = 0x4e6f
                         , _version   = 1
@@ -293,7 +392,7 @@ myCircuit
   :: (HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth, dataWidth~4)
   => Circuit (PacketStream dom dataWidth ()) (PacketStream dom dataWidth ())
 myCircuit = circuit $ \pm -> do
-  ebpkt <- etherboneDepacketizerC -< pm
+  ebpkt <- etherboneDepacketizerC <| traceC "CircIn" -< pm
 
   -- Filters out invalid, probe and record packets
   [probe, record] <- receiverC -< ebpkt
@@ -301,9 +400,12 @@ myCircuit = circuit $ \pm -> do
   -- The `record` branch is consumed and thrown out
   -- consume <| traceC "Record" -< record
   
-  rdpkt <- traceC "RecordOut" <| recordDepacketizerC <| traceC "RecordIn" -< record
-  rpkt <- traceC "InserterOut" <| recordInserterC -< rdpkt
-  -- rpkt <- traceC "InserterOut" <| recordPacketizerC -< rdpkt
+  --wbmOut <- traceC "RecordOut" <| recordDepacketizerC <| traceC "RecordIn" -< record
+  --rpkt <- traceC "InserterOut" <| recordPacketizerC -< rdpkt
+  --rpkt <- traceC "InserterOut" <| recordInserterC -< wbmOut
+
+  wbmOut <- traceC "WBMOut" <| wishboneMasterC <| traceC "WBMIn " -< record
+  rpkt <- traceC "InserterOut" <| recordInserterC -< wbmOut
 
   probeOut <- probeHandlerC -< probe
 
@@ -376,14 +478,14 @@ streamInput =
   , Nothing
   , packet False $ Just 0x4e6f1044
   , packet False $ Just 0xe80f0100
-  , packet False $ Just 0xcc
-  , packet False $ Just 0xdd
-  , packet True  $ Just 0x00
+  , packet False $ Just 0x11
+  , packet True $ Just 0x22
+  -- , packet True  $ Just 0x00
   , Nothing
   , packet False $ Just 0x4e6f1044
-  , packet False $ Just 0xe80f0000
-  , packet False $ Just 0xcc
-  , packet True  $ Just 0xdd
+  , packet True $ Just 0xe80f0000
+  --, packet False $ Just 0xcc
+  --, packet True  $ Just 0xdd
   , Nothing
   , packet False $ Just 0x4e6f1044
   , packet False $ Just 0xe80f0100
