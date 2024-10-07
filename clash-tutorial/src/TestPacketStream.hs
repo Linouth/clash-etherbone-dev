@@ -15,6 +15,7 @@ import Protocols.PacketStream
 import Protocols.PacketStream.Base
 import Protocols.Wishbone
 import Protocols.Idle
+import qualified Protocols.Df as Df
 -- import Protocols.Internal
 -- import Protocols.Wishbone
 
@@ -67,10 +68,10 @@ etherbonePacketizerC = packetizerC (const ()) id
 -- Extract RecordHeader data from stream into metadata
 -- We can drop EBHeader. All info in here is static and known
 recordDepacketizerC
-  :: (HiddenClockResetEnable dom, KnownNat dataWidth, 1 <= dataWidth)
- => Circuit (PacketStream dom dataWidth EBHeader) (PacketStream dom dataWidth RecordHeader)
-recordDepacketizerC = depacketizerC metaMap
-  where metaMap hdr _ = hdr
+  :: forall dom dataWidth .
+  (HiddenClockResetEnable dom, KnownNat dataWidth, 1 <= dataWidth)
+  => Circuit (PacketStream dom dataWidth EBHeader) (PacketStream dom dataWidth RecordHeader)
+recordDepacketizerC = depacketizerC const
 
 -- Concat RecordHeader metadata back into data stream
 -- Header is moddified to map to a response record (e.g. WCount = RCount)
@@ -96,6 +97,222 @@ recordPacketizerC = packetizerC (const ebHeader) metaHeaderMap
                         , _wff = _rff m
                         , _rCount = 0
                         , _wCount = _rCount m
+                        }
+
+-- Extract 'side-channel' signal with the RecordHeader for the `recordBuilderC`. Only
+-- the first cycle holds an accurate header.
+-- TODO: This is extremely hacky. See if this can be implemented without manually
+-- extracting data from the raw stream
+recordSignalC
+  :: forall dom dataWidth . (KnownNat dataWidth, 4 <= dataWidth)
+  => Circuit (PacketStream dom dataWidth EBHeader)
+             (PacketStream dom dataWidth EBHeader, CSignal dom RecordHeader)
+recordSignalC = Circuit (\(fwd, (bwd, _)) -> (bwd, (fwd, header <$> fwd)))
+  where
+    header :: Maybe (PacketStreamM2S dataWidth EBHeader) -> RecordHeader
+    header Nothing  = unpack zeroBits
+    header (Just f) = unpack $ pack $ takeI @4 @(dataWidth-4) $ _data f
+
+
+recordRxToTx :: RecordHeader -> RecordHeader
+recordRxToTx hdr = hdr { _bca = False
+                       , _rca = False
+                       , _rff = False
+                       , _wca = _bca hdr
+                       , _wff = _rff hdr
+                       , _rCount = 0
+                       , _wCount = _rCount hdr
+                       }
+
+ebTx = EBHeader { _magic    = 0x4e6f
+                , _version  = 1
+                , _res      = 0
+                , _nr       = True
+                , _pr       = False
+                , _pf       = False
+                , _addrSize = 0b0100
+                , _portSize = 0b0100
+                }
+
+
+data RecordBuilderState
+  -- If wCount>0: Write zeros, jump to Pad
+  --              or backpressure and then pad. Then it matches the rest
+  -- If rCount>0: *Write header* and jump to Passthrough
+  --              or give a cycle backpressure and jump to Header 
+  -- No read or write: write header, jump to passthrough
+  --              or Write Nothing, jump to Header. 
+  = BuilderInit
+  -- ^ Sends zeros or a header, depending on the wCount and rCount fields.
+  | BuilderPad          { _header :: RecordHeader }
+  -- ^ Sends zero padding. Required for wCount > 0 case
+  | BuilderHeader       { _header :: RecordHeader }
+  -- ^ Sends the header. Required for wCount > 0 case
+  | BuilderPassthrough  { _header :: RecordHeader }
+  deriving (Generic, NFDataX, Show, ShowX)
+
+recordBuilderT
+  :: forall dataWidth . (KnownNat dataWidth, 4 <= dataWidth)
+  => RecordBuilderState 
+  -> ( (Maybe (PacketStreamM2S dataWidth RecordHeader), Df.Data RecordHeader)
+     , PacketStreamS2M
+     )
+  -> ( RecordBuilderState
+     , ( (PacketStreamS2M, Ack)
+       , Maybe (PacketStreamM2S dataWidth EBHeader) )
+     )
+recordBuilderT BuilderInit ((_, Df.NoData), _)
+  = errorX "BuilderInit state, but no header data given. This should not happen?"
+  -- = (BuilderInit, ( (PacketStreamS2M False, Ack False), Nothing ))
+recordBuilderT BuilderInit ((_, Df.Data hdr), PacketStreamS2M{_ready})
+  = (nextState, ( (PacketStreamS2M _ready, Ack _ready), Just out ))
+  where
+    (nextState', out')
+      | _wCount hdr > 0 = (BuilderPad hdr,         outZeros)
+      | otherwise       = (BuilderPassthrough hdr, outHeader)
+
+    (nextState, out) =
+      if _ready
+        then (nextState', out')
+        else (BuilderInit, out')
+
+    outZeros = PacketStreamM2S (repeat 0) Nothing ebTx False
+    outHeader = PacketStreamM2S (dat ++ repeat @(dataWidth-4) 0) Nothing ebTx False
+    dat = bitCoerce (recordRxToTx hdr)
+recordBuilderT BuilderPad{_header} ((_, _), PacketStreamS2M{_ready})
+  = (nextState, ( (PacketStreamS2M _ready, Ack True), Just outZeros ))
+  where
+    nextState
+      | not _ready   = BuilderPad _header
+      | wCount' == 0 = BuilderHeader header'
+      | otherwise    = BuilderPad header'
+
+    wCount  = _wCount _header
+    wCount' = wCount - 1
+    header' = _header { _wCount = wCount' }
+
+    outZeros = PacketStreamM2S (repeat 0) Nothing ebTx False
+recordBuilderT BuilderHeader{_header} ((_, _), PacketStreamS2M{_ready})
+  = (nextState, ( (PacketStreamS2M _ready, Ack True), Just outHeader ))
+  where
+    nextState
+      | not _ready = BuilderHeader _header
+      | otherwise  = BuilderPassthrough _header
+
+    outHeader = PacketStreamM2S (dat ++ repeat @(dataWidth-4) 0) Nothing ebTx False
+    dat = bitCoerce (recordRxToTx _header)
+--recordBuilderT BuilderPassthrough{_header} ((Nothing, _), PacketStreamS2M{_ready})
+recordBuilderT st@BuilderPassthrough{_header} ((Nothing, _), _)
+  = (st, ( (PacketStreamS2M True, Ack True), Nothing ))
+recordBuilderT st@BuilderPassthrough{_header} ((Just x, _), PacketStreamS2M{_ready})
+  = (nextState, ( (PacketStreamS2M _ready, Ack True), Just out))
+  where
+    nextState
+      | not _ready       = st
+      | isJust (_last x) = BuilderInit
+      | otherwise        = st
+
+    out = x { _meta = ebTx }
+
+recordBuilderC
+  :: forall dom dataWidth .
+  ( HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth)
+  => Circuit (PacketStream dom dataWidth RecordHeader, Df dom RecordHeader)
+             (PacketStream dom dataWidth EBHeader)
+recordBuilderC = Circuit (B.first unbundle . go . B.first bundle)
+  where
+    go = mealyB recordBuilderT BuilderInit
+
+
+
+tmpRecordHdr = RecordHeader False False False 0 False False False 0 0 0 0
+
+recordBuilderInput :: [((Maybe (PacketStreamM2S 4 RecordHeader), Df.Data RecordHeader), PacketStreamS2M)]
+recordBuilderInput =
+  [ ((Just $ PacketStreamM2S (repeat 0) Nothing tmpRecordHdr False, Df.Data $ RecordHeader False False False 0 False False False 0 0 1 1), PacketStreamS2M True)
+  ]
+
+-- testC :: (HiddenClockResetEnable dom, KnownNat dataWidth)
+--   => Circuit (PacketStream dom dataWidth ()) (PacketStream dom dataWidth ())
+-- testC = Circuit go
+--   where
+--     go (fwd, bwd) = (bwd, fwd')
+--       where
+--         fwd' = register undefined fwd
+
+
+testC :: (HiddenClockResetEnable dom) => Signal dom (Unsigned 8)
+testC = register 0 (succ <$> testC)
+
+
+
+
+data RecordInserterState (dataWidth :: Nat) = RecordInserterState
+  { _inserted   :: Bool
+  , _prevStream :: Maybe (PacketStreamM2S dataWidth EBHeader)
+  } deriving (Generic, NFDataX)
+
+-- For now, only 32 and 64 bit.
+-- Bool indicates wether header has been inserted already
+recordInserterC
+  :: forall dom dataWidth .
+  (HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth, dataWidth~4)
+  => Circuit (PacketStream dom dataWidth RecordHeader)
+             (PacketStream dom dataWidth EBHeader)
+recordInserterC = Circuit go
+  where
+    go (fwd, bwd) = (bwd, mealyB insertT False (fwd, bwd))
+
+    insertT
+      :: Bool
+      -> (Maybe (PacketStreamM2S dataWidth RecordHeader), PacketStreamS2M)
+      -> (Bool, Maybe (PacketStreamM2S dataWidth EBHeader))
+    insertT s     (Nothing, _)    = (s, Nothing)
+    insertT False (Just f,  b)
+      | _wCount (_meta f) == 0    = case _last f of
+        Nothing                  -> (_ready b, Just $ insert f)
+        Just _                   -> (False,    Just $ insert f)
+      | otherwise                 = (False,    Just $ ebMeta f)
+    insertT True  (Just f,  b)
+      | isJust (_last f)          = (not $ _ready b, Just $ ebMeta f)
+      | otherwise                 = (True,           Just $ ebMeta f)
+
+    ebMeta  f = f { _meta = ebHeader }
+    -- insert  f = ebMeta f { _data = bitCoerce (0 :: BitVector 32) }
+    insert  f = ebMeta f { _data = bitCoerce metaBits ++ repeat 0 }
+      where
+        metaBits = pack $ recordMetaMap $ _meta f
+
+    ebHeader = EBHeader { _magic     = 0x4e6f
+                        , _version   = 1
+                        , _res       = 0
+                        , _nr        = True
+                        , _pr        = False
+                        , _pf        = False
+                        , _addrSize  = width
+                        , _portSize  = width
+                        }
+      where width = snatToNum (SNat @dataWidth)
+
+    recordMetaMap m = m { _bca = False
+                        , _rca = False
+                        , _rff = False
+                        , _wca = _bca m
+                        , _wff = _rff m
+                        , _rCount = 0
+                        , _wCount = _rCount m
+                        }
+
+
+recordHandlerC = mapMeta fn
+  where fn _ = EBHeader { _magic     = 0x4e6f
+                        , _version   = 0b1111
+                        , _res       = 0
+                        , _nr        = True
+                        , _pr        = False
+                        , _pf        = False
+                        , _addrSize  = 0b0100
+                        , _portSize  = 0b0100
                         }
 
 
@@ -191,25 +408,20 @@ traceC name = Circuit go
     printf dir f c = trace (dir <> " " <> show c <> " " <> name <> " " <> ": " <> show f) f
 
 
--- slave
---   :: Circuit ()
---              (Wishbone dom Standard 32 (BitVector dataWidth))
---   -> Circuit (PacketStream dom dataWidth RecordHeader)
---              (PacketStream dom dataWidth RecordHeader)
--- -- slave = id
-
--- data WishboneMasterState = WaitForRecord | WriteAddr | Write | ReadAddr | Read
 data WishboneMasterState (addrWidth :: Nat)
   -- TODO: Aborted
-  = WaitForRecord
+  --       Aborts will be handled by a component higher in the chain. No need to
+  --       do this in the state machine
+  = WriteOrReadAddr
 
-  | Write { _metaOut :: RecordHeader
-          , _addr :: Maybe (BitVector addrWidth)
+  | Write { _writesLeft :: Unsigned 8
+          , _addr :: BitVector addrWidth
           }
 
-  | Read  { _metaOut :: RecordHeader
-          , _addr :: Maybe (BitVector addrWidth)
-          }
+  | ReadAddr
+  | Read  { _readsLeft :: Unsigned 8 }
+
+  | Wait
   deriving (Generic, Show, ShowX, NFDataX)
 
 -- TODO: Write WBM block
@@ -224,14 +436,88 @@ wishboneMasterT
   ( KnownNat dataWidth
   , KnownNat addrWidth
   , 4 <= dataWidth
-  , DivRU addrWidth 8 <= dataWidth
-  , DivRU addrWidth 8 * 8 ~ addrWidth)
+  )
   => WishboneMasterState addrWidth
-  -> (Maybe (PacketStreamM2S dataWidth EBHeader), PacketStreamS2M)
+  -> (Maybe (PacketStreamM2S dataWidth RecordHeader), PacketStreamS2M)
   -> ( WishboneMasterState addrWidth
      , (PacketStreamS2M, Maybe (PacketStreamM2S dataWidth RecordHeader))
      )
 wishboneMasterT state (Nothing, bwd) = (state, (bwd, Nothing))
+wishboneMasterT WriteOrReadAddr  (Just x, PacketStreamS2M{_ready})
+  = (nextState, (PacketStreamS2M _ready, out))
+  where
+    addr = resize $ pack $ _data x
+
+    wCount = _wCount (_meta x)
+    rCount = _rCount (_meta x)
+
+    -- The state if no backpressure is given
+    idealNextState
+      | wCount > 0 = Write wCount addr
+      | rCount > 0 = Read rCount
+      | otherwise  = Wait
+
+    nextState
+      | not _ready = WriteOrReadAddr
+      | otherwise  = idealNextState
+    
+    out = case idealNextState of
+      -- Pass data if this is a BaseRetAddr
+      Read _  -> Just x
+      _       -> Just $ x { _data = repeat 0 }
+wishboneMasterT st@Write{..} (Just x, PacketStreamS2M{_ready})
+  = (nextState, (PacketStreamS2M _ready, Just out))
+  where
+    meta = (_meta x) { _wCount = wCount' }
+    out = x { _data = repeat 0
+            , _meta = meta
+            }
+
+    wCount = _writesLeft
+    wCount' = wCount - 1
+
+    nextState
+      | not _ready    = st
+      | wCount' == 0  = ReadAddr
+      | otherwise     = Write wCount' _addr
+wishboneMasterT ReadAddr (Just x, PacketStreamS2M{_ready})
+  = (nextState, (PacketStreamS2M _ready, Just out))
+  where
+    -- Pass through the BaseRetAddr to the BaseWriteAddr field
+    -- wCount is set to 0. There is no way to get to this state with wCount > 0
+    meta = (_meta x) { _wCount = 0 }
+    out = x { _meta = meta }
+
+    rCount = _rCount (_meta x)
+
+    nextState
+      | not _ready = ReadAddr
+      | rCount > 0 = Read rCount
+      | otherwise  = Wait
+wishboneMasterT st@Read{..} (Just x, PacketStreamS2M{_ready})
+  = (nextState, (PacketStreamS2M _ready, Just out))
+  where
+    out = x { _data = repeat 0xaa }
+
+    rCount  = _readsLeft
+    rCount' = rCount - 1
+
+    nextState
+      | not _ready    = st
+      | rCount' == 0  = Wait
+      | otherwise     = Read rCount'
+wishboneMasterT Wait (Just x, _) = (nextState, (PacketStreamS2M True, Nothing))
+  where
+    -- TODO: Check for end of packet. If found, jump back to WriteOrReadAddr
+    -- TODO: Also check this in the ReadAddr Write and Read states, as this is
+    -- where it most likely happens
+    nextState = Wait
+
+
+-- wishboneMasterT Wait _ = ()
+
+
+{-
 wishboneMasterT WaitForRecord (Just x, PacketStreamS2M{_ready})
   = (nextState, (PacketStreamS2M _ready, Just out))
   where
@@ -300,7 +586,7 @@ wishboneMasterT st@Read{..} (Just x, PacketStreamS2M{_ready})
     addrBytes = takeI (_data x)
     addr :: BitVector addrWidth
     addr = bitCoerce addrBytes
-
+-}
 
 
 -- Reason for receiving the header in the state machine is so that we can send
@@ -317,87 +603,20 @@ wishboneMasterC
   , 4 <= dataWidth
   , DivRU addrWidth 8 <= dataWidth
   , DivRU addrWidth 8 * 8 ~ addrWidth)
-  => Circuit (PacketStream dom dataWidth EBHeader)
+  => Circuit (PacketStream dom dataWidth RecordHeader)
              (PacketStream dom dataWidth RecordHeader)
              -- , Wishbone dom Standard 32 (BitVector dataWidth))
 wishboneMasterC = Circuit $ fsm
   where
-    fsm (fwd, bwd) = mealyB (wishboneMasterT @_ @addrWidth) WaitForRecord
-      (seq (tr fwd) fwd, bwd)
-    tr f = traceSignal1 "" $ foo <$> f
+    fsm (fwd, bwd) = mealyB (wishboneMasterT @_ @addrWidth) WriteOrReadAddr
+      (fwd, bwd)
+    -- tr f = traceSignal1 "" $ foo <$> f
 
 
 foo :: (KnownNat dataWidth) => Maybe (PacketStreamM2S dataWidth meta) -> BitVector (dataWidth * 8)
 foo Nothing  = oneBits
 foo (Just x) = bitCoerce $ _data x
 
-
-data RecordInserterState (dataWidth :: Nat) = RecordInserterState
-  { _inserted   :: Bool
-  , _prevStream :: Maybe (PacketStreamM2S dataWidth EBHeader)
-  } deriving (Generic, NFDataX)
-
--- For now, only 32 and 64 bit.
-recordInserterC
-  :: forall dom dataWidth .
-  (HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth, dataWidth~4)
-  => Circuit (PacketStream dom dataWidth RecordHeader)
-             (PacketStream dom dataWidth EBHeader)
-recordInserterC = Circuit go
-  where
-    go (fwd, bwd) = (bwd, mealyB insertT False (fwd, bwd))
-
-    insertT
-      :: Bool
-      -> (Maybe (PacketStreamM2S dataWidth RecordHeader), PacketStreamS2M)
-      -> (Bool, Maybe (PacketStreamM2S dataWidth EBHeader))
-    insertT s     (Nothing, _)    = (s, Nothing)
-    insertT False (Just f,  b)
-      | _wCount (_meta f) == 0    = case _last f of
-        Nothing                  -> (_ready b, Just $ insert f)
-        Just _                   -> (False,    Just $ insert f)
-      | otherwise                 = (False,    Just $ ebMeta f)
-    insertT True  (Just f,  b)
-      | isJust (_last f)          = (not $ _ready b, Just $ ebMeta f)
-      | otherwise                 = (True,           Just $ ebMeta f)
-
-    ebMeta  f = f { _meta = ebHeader }
-    -- insert  f = ebMeta f { _data = bitCoerce (0 :: BitVector 32) }
-    insert  f = ebMeta f { _data = bitCoerce metaBits ++ repeat 0 }
-      where
-        metaBits = pack $ recordMetaMap $ _meta f
-
-    ebHeader = EBHeader { _magic     = 0x4e6f
-                        , _version   = 1
-                        , _res       = 0
-                        , _nr        = True
-                        , _pr        = False
-                        , _pf        = False
-                        , _addrSize  = width
-                        , _portSize  = width
-                        }
-      where width = snatToNum (SNat @dataWidth)
-
-    recordMetaMap m = m { _bca = False
-                        , _rca = False
-                        , _rff = False
-                        , _wca = _bca m
-                        , _wff = _rff m
-                        , _rCount = 0
-                        , _wCount = _rCount m
-                        }
-
-
-recordHandlerC = mapMeta fn
-  where fn _ = EBHeader { _magic     = 0x4e6f
-                        , _version   = 0b1111
-                        , _res       = 0
-                        , _nr        = True
-                        , _pr        = False
-                        , _pf        = False
-                        , _addrSize  = 0b0100
-                        , _portSize  = 0b0100
-                        }
 
 -- Final circuit
 myCircuit
@@ -416,7 +635,7 @@ myCircuit = circuit $ \pm -> do
   --rpkt <- traceC "InserterOut" <| recordPacketizerC -< rdpkt
   --rpkt <- traceC "InserterOut" <| recordInserterC -< wbmOut
 
-  wbmOut <- traceC "WBMOut" <| wishboneMasterC <| traceC "WBMIn " -< record
+  wbmOut <- traceC "WBMOut" <| wishboneMasterC <| traceC "WBMIn " <| recordDepacketizerC <| traceC "RcrdIn" -< record
   rpkt <- traceC "InserterOut" <| recordInserterC -< wbmOut
 
   probeOut <- probeHandlerC -< probe
