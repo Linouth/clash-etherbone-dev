@@ -68,10 +68,14 @@ etherbonePacketizerC = packetizerC (const ()) id
 -- Extract RecordHeader data from stream into metadata
 -- We can drop EBHeader. All info in here is static and known
 recordDepacketizerC
-  :: forall dom dataWidth .
-  (HiddenClockResetEnable dom, KnownNat dataWidth, 1 <= dataWidth)
+  :: (HiddenClockResetEnable dom, KnownNat dataWidth, 1 <= dataWidth)
   => Circuit (PacketStream dom dataWidth EBHeader) (PacketStream dom dataWidth RecordHeader)
 recordDepacketizerC = depacketizerC const
+
+recordDepacketizerToDfC
+  :: (HiddenClockResetEnable dom, KnownNat dataWidth, 1 <= dataWidth)
+  => Circuit (PacketStream dom dataWidth EBHeader) (Df dom RecordHeader)
+recordDepacketizerToDfC = depacketizeToDfC @4 const
 
 -- Concat RecordHeader metadata back into data stream
 -- Header is moddified to map to a response record (e.g. WCount = RCount)
@@ -151,36 +155,59 @@ data RecordBuilderState
   | BuilderPassthrough  { _header :: RecordHeader }
   deriving (Generic, NFDataX, Show, ShowX)
 
+-- TODO: Last and abort handling
 recordBuilderT
   :: forall dataWidth . (KnownNat dataWidth, 4 <= dataWidth)
   => RecordBuilderState 
-  -> ( (Maybe (PacketStreamM2S dataWidth RecordHeader), Df.Data RecordHeader)
+  -- -> ( (Maybe (PacketStreamM2S dataWidth RecordHeader), Df.Data RecordHeader)
+  --    , PacketStreamS2M
+  --    )
+  -- -> ( RecordBuilderState
+  --    , ( (PacketStreamS2M, Ack)
+  --      , Maybe (PacketStreamM2S dataWidth EBHeader) )
+  --    )
+  -> ( (Maybe (PacketStreamM2S dataWidth RecordHeader)
+       , Maybe (PacketStreamM2S dataWidth EBHeader)
+       )
      , PacketStreamS2M
      )
   -> ( RecordBuilderState
-     , ( (PacketStreamS2M, Ack)
+     , ( (PacketStreamS2M, PacketStreamS2M)
        , Maybe (PacketStreamM2S dataWidth EBHeader) )
      )
-recordBuilderT BuilderInit ((_, Df.NoData), _)
-  = errorX "BuilderInit state, but no header data given. This should not happen?"
-  -- = (BuilderInit, ( (PacketStreamS2M False, Ack False), Nothing ))
-recordBuilderT BuilderInit ((_, Df.Data hdr), PacketStreamS2M{_ready})
-  = (nextState, ( (PacketStreamS2M _ready, Ack _ready), Just out ))
+recordBuilderT BuilderInit ((_, Nothing), _)
+  -- = errorX "BuilderInit state, but no header data given. This should not happen?"
+  = (trace "Init" BuilderInit, ( (PacketStreamS2M False, PacketStreamS2M False), Nothing ))
+recordBuilderT BuilderInit ((_, Just hdr'), PacketStreamS2M{_ready})
+  = (nextState, ( (PacketStreamS2M _ready, PacketStreamS2M _ready), Just out ))
   where
-    (nextState', out')
+    (nextState', out)
       | _wCount hdr > 0 = (BuilderPad hdr,         outZeros)
       | otherwise       = (BuilderPassthrough hdr, outHeader)
 
-    (nextState, out) =
-      if _ready
-        then (nextState', out')
-        else (BuilderInit, out')
+    nextState
+      | not _ready          = BuilderInit
+      | isJust (_last hdr') = BuilderInit
+      | otherwise           = nextState'
 
-    outZeros = PacketStreamM2S (repeat 0) Nothing ebTx False
-    outHeader = PacketStreamM2S (dat ++ repeat @(dataWidth-4) 0) Nothing ebTx False
+    wCount = _wCount hdr
+    rCount = _rCount hdr
+    isLast = wCount == 0 && rCount == 0
+
+    outLast =
+      if isLast
+      then Just (natToNum @(dataWidth-1))
+      else Nothing
+
+    outZeros = PacketStreamM2S (repeat 0) outLast ebTx False
+    outHeader = PacketStreamM2S (dat ++ repeat @(dataWidth-4) 0) outLast ebTx False
     dat = bitCoerce (recordRxToTx hdr)
+
+    -- This essentially replaces depacketizerToDf
+    hdr :: RecordHeader
+    hdr = bitCoerce $ takeI @_ @(dataWidth-4) (_data hdr')
 recordBuilderT BuilderPad{_header} ((_, _), PacketStreamS2M{_ready})
-  = (nextState, ( (PacketStreamS2M _ready, Ack True), Just outZeros ))
+  = (nextState, ( (PacketStreamS2M _ready, PacketStreamS2M True), Just outZeros ))
   where
     nextState
       | not _ready   = BuilderPad _header
@@ -192,20 +219,28 @@ recordBuilderT BuilderPad{_header} ((_, _), PacketStreamS2M{_ready})
     header' = _header { _wCount = wCount' }
 
     outZeros = PacketStreamM2S (repeat 0) Nothing ebTx False
-recordBuilderT BuilderHeader{_header} ((_, _), PacketStreamS2M{_ready})
-  = (nextState, ( (PacketStreamS2M _ready, Ack True), Just outHeader ))
+recordBuilderT st@BuilderHeader{_header} ((_, _), PacketStreamS2M{_ready})
+  = (nextState, ( (PacketStreamS2M _ready, PacketStreamS2M True), Just outHeader ))
   where
     nextState
-      | not _ready = BuilderHeader _header
-      | otherwise  = BuilderPassthrough _header
+      | not _ready  = st
+      | isLast      = BuilderInit
+      | otherwise   = BuilderPassthrough _header
 
-    outHeader = PacketStreamM2S (dat ++ repeat @(dataWidth-4) 0) Nothing ebTx False
+    rCount = _rCount _header
+    isLast = rCount == 0
+
+    outHeader =
+      PacketStreamM2S
+        (dat ++ repeat @(dataWidth-4) 0)
+        (if isLast then Just (natToNum @(dataWidth-1)) else Nothing)
+        ebTx
+        False
     dat = bitCoerce (recordRxToTx _header)
---recordBuilderT BuilderPassthrough{_header} ((Nothing, _), PacketStreamS2M{_ready})
 recordBuilderT st@BuilderPassthrough{_header} ((Nothing, _), _)
-  = (st, ( (PacketStreamS2M True, Ack True), Nothing ))
+  = (st, ( (PacketStreamS2M True, PacketStreamS2M True), Nothing ))
 recordBuilderT st@BuilderPassthrough{_header} ((Just x, _), PacketStreamS2M{_ready})
-  = (nextState, ( (PacketStreamS2M _ready, Ack True), Just out))
+  = (nextState, ( (PacketStreamS2M _ready, PacketStreamS2M True), Just out))
   where
     nextState
       | not _ready       = st
@@ -217,33 +252,15 @@ recordBuilderT st@BuilderPassthrough{_header} ((Just x, _), PacketStreamS2M{_rea
 recordBuilderC
   :: forall dom dataWidth .
   ( HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth)
-  => Circuit (PacketStream dom dataWidth RecordHeader, Df dom RecordHeader)
+  -- => Circuit (PacketStream dom dataWidth RecordHeader, Df dom RecordHeader)
+  => Circuit (PacketStream dom dataWidth RecordHeader, PacketStream dom dataWidth EBHeader)
              (PacketStream dom dataWidth EBHeader)
 recordBuilderC = Circuit (B.first unbundle . go . B.first bundle)
   where
-    go = mealyB recordBuilderT BuilderInit
-
-
-
-tmpRecordHdr = RecordHeader False False False 0 False False False 0 0 0 0
-
-recordBuilderInput :: [((Maybe (PacketStreamM2S 4 RecordHeader), Df.Data RecordHeader), PacketStreamS2M)]
-recordBuilderInput =
-  [ ((Just $ PacketStreamM2S (repeat 0) Nothing tmpRecordHdr False, Df.Data $ RecordHeader False False False 0 False False False 0 0 1 1), PacketStreamS2M True)
-  ]
-
--- testC :: (HiddenClockResetEnable dom, KnownNat dataWidth)
---   => Circuit (PacketStream dom dataWidth ()) (PacketStream dom dataWidth ())
--- testC = Circuit go
---   where
---     go (fwd, bwd) = (bwd, fwd')
---       where
---         fwd' = register undefined fwd
-
-
-testC :: (HiddenClockResetEnable dom) => Signal dom (Unsigned 8)
-testC = register 0 (succ <$> testC)
-
+    -- go = mealyB recordBuilderT BuilderInit
+    go = mealyB fn BuilderInit
+      where
+        fn s inp = trace ("State: " <> show s <> " Inp: " <> show (fst inp)) recordBuilderT s inp
 
 
 
@@ -620,23 +637,22 @@ foo (Just x) = bitCoerce $ _data x
 
 -- Final circuit
 myCircuit
-  :: (HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth, dataWidth~4)
+  :: (HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth)
   => Circuit (PacketStream dom dataWidth ()) (PacketStream dom dataWidth ())
 myCircuit = circuit $ \pm -> do
   ebpkt <- etherboneDepacketizerC <| traceC "CircIn" -< pm
 
   -- Filters out invalid, probe and record packets
   [probe, record] <- receiverC -< ebpkt
-
-  -- The `record` branch is consumed and thrown out
-  -- consume <| traceC "Record" -< record
   
-  --wbmOut <- traceC "RecordOut" <| recordDepacketizerC <| traceC "RecordIn" -< record
-  --rpkt <- traceC "InserterOut" <| recordPacketizerC -< rdpkt
-  --rpkt <- traceC "InserterOut" <| recordInserterC -< wbmOut
+  -- wbmOut <- traceC "WBMOut" <| wishboneMasterC <| traceC "WBMIn " <| recordDepacketizerC <| traceC "RcrdIn" -< record
+  -- rpkt <- traceC "InserterOut" <| recordInserterC -< wbmOut
 
-  wbmOut <- traceC "WBMOut" <| wishboneMasterC <| traceC "WBMIn " <| recordDepacketizerC <| traceC "RcrdIn" -< record
-  rpkt <- traceC "InserterOut" <| recordInserterC -< wbmOut
+  [recordA, recordB] <- fanout -< record
+  wbmOut <- traceC "WBMOut" <| wishboneMasterC <| traceC "WBMIn " <| recordDepacketizerC <| traceC "RcrdIn" -< recordB
+
+  rA <- traceC "ByPass" -< recordA
+  rpkt <- traceC "Builder" <| recordBuilderC -< (wbmOut, rA)
 
   probeOut <- probeHandlerC -< probe
 
@@ -644,6 +660,7 @@ myCircuit = circuit $ \pm -> do
 
   etherbonePacketizerC -< resp
   -- etherbonePacketizerC -< ebpkt
+
 
 {-
   With recordHandlerC
@@ -702,6 +719,10 @@ packet l (Just x) = Just $ PacketStreamM2S (bitCoerce x) lastIndex () False
   where lastIndex = if l then Just 3 else Nothing
 
 
+-- takeILe :: forall f a b. (Resize f, KnownNat a, KnownNat b, b <= a) => f a -> f b
+-- takeILe x = leToPlus @b @a $ takeI x
+
+
 streamInput :: [Maybe (PacketStreamM2S 4 ())]
 streamInput = 
   [ packet False $ Just 0x4e6f11ff
@@ -741,7 +762,7 @@ topEntity
 topEntity clk rst en = fn
   where
     fn x = snd $ toSignals circ (x, pure $ PacketStreamS2M True)
-    circ = exposeClockResetEnable myCircuit clk rst en
+    circ = exposeClockResetEnable (myCircuit @_ @4) clk rst en
 
 
 -- Simulate with
