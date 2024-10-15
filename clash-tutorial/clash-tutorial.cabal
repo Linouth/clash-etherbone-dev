@@ -92,6 +92,9 @@ library
     Scratchpad
     Top
     TestPacketStream
+    Etherbone.Base
+    Etherbone.RecordProcessor
+    Etherbone.WishboneMaster
   default-language: Haskell2010
 
 -- Builds the executable 'clash', with clash-tutorial project in scope

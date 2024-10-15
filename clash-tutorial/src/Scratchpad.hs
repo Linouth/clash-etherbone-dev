@@ -51,10 +51,11 @@ foo = fromInteger (natVal (Proxy :: Proxy n)-1)
 
 
 scratchpad
-  :: (KnownNat n, HiddenClockResetEnable dom, NFDataX a, Bits a)
+  :: forall n dom a . (KnownNat n, HiddenClockResetEnable dom, NFDataX a, BitPack a)
   => Signal dom (Bool, Index n, a)
   -> Signal dom a
-scratchpad = mealy scratchpadT (repeat zeroBits)
+-- scratchpad = mealy scratchpadT (repeat zeroBits)
+scratchpad = mealy scratchpadT (map unpack $ iterateI (+1) 0)
 
 
 -- n: number of registers in regfile

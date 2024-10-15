@@ -3,47 +3,32 @@
 
 module TestPacketStream where
 
-import Debug.Trace
+-- import Debug.Trace
 import Data.Bifunctor as B
 import Data.Maybe
 
 import Clash.Prelude
 import Clash.Annotations.TH
+import Clash.Annotations.SynthesisAttributes
+import Clash.Magic
 
 import Protocols
 import Protocols.PacketStream
 import Protocols.PacketStream.Base
 import Protocols.Wishbone
+import Protocols.Idle
 import qualified Prelude as P
+import Etherbone.Base
+import Etherbone.WishboneMaster (wishboneMasterC, WBData, ByteSize)
+import Etherbone.RecordProcessor (recordProcessorC)
+import Scratchpad (wishboneScratchpad)
+import Numeric (showHex)
+
+trace _ x = x
 
 
 config :: SimulationConfig
 config = SimulationConfig 1 maxBound False
-
-data EBHeader = EBHeader
-  { _magic    :: Unsigned 16
-  , _version  :: Unsigned 4
-  , _res      :: Bit
-  , _nr       :: Bool
-  , _pr       :: Bool
-  , _pf       :: Bool
-  , _addrSize :: BitVector 4
-  , _portSize :: BitVector 4
-  } deriving (Generic, BitPack, NFDataX, Show, ShowX)
-
-data RecordHeader = RecordHeader
-  { _bca    :: Bool
-  , _rca    :: Bool
-  , _rff    :: Bool
-  , _res0   :: Bit
-  , _cyc    :: Bool
-  , _wca    :: Bool
-  , _wff    :: Bool
-  , _res1   :: Bit
-  , _byteEn :: BitVector 8
-  , _wCount :: Unsigned 8
-  , _rCount :: Unsigned 8
-  } deriving (Generic, BitPack, NFDataX, Show, ShowX)
 
 
 -- Extract EBHeader data from stream into metadata
@@ -169,7 +154,7 @@ recordBuilderT
      )
 recordBuilderT BuilderInit ((_, Nothing), _)
   -- = errorX "BuilderInit state, but no header data given. This should not happen?"
-  = (trace "Init" BuilderInit, ( (PacketStreamS2M False, PacketStreamS2M False), Nothing ))
+  = (BuilderInit, ( (PacketStreamS2M False, PacketStreamS2M False), Nothing ))
 recordBuilderT BuilderInit ((_, Just hdr'), PacketStreamS2M{_ready})
   = (nextState, ( (PacketStreamS2M _ready, PacketStreamS2M _ready), Just out ))
   where
@@ -252,7 +237,7 @@ recordBuilderC = Circuit (B.first unbundle . go . B.first bundle)
     -- go = mealyB recordBuilderT BuilderInit
     go = mealyB fn BuilderInit
       where
-        fn s inp = trace ("State: " <> show s <> " Inp: " <> show (fst inp)) recordBuilderT s inp
+        fn s inp = recordBuilderT s inp
 
 
 
@@ -329,6 +314,12 @@ recordHandlerC = mapMeta fn
 data Size = B8 | B16 | B32 | B64 deriving (Generic, Eq, BitPack)
 
 
+-- {-# ANN myCircuit (Synthesize
+--     { t_name = "myCircuit"
+--     , t_inputs = [ PortName "recvInFwd", PortName "recvOutBwd" ]
+--     , t_output = PortProduct "" [ PortName "recvInBwd", PortName "rcvOutFwd" ]
+--     }
+--   ) #-}
 receiverC
   :: (HiddenClockResetEnable dom)
   => Circuit (PacketStream dom dataWidth EBHeader)
@@ -388,20 +379,20 @@ arbiterC :: (HiddenClockResetEnable dom, KnownNat n, 1 <= n) =>
 arbiterC = packetArbiterC RoundRobin
 
 
-cycExportC :: Circuit (PacketStream dom dataWidth RecordHeader)
-                      (PacketStream dom dataWidth RecordHeader
-                      , CSignal dom (Maybe Bool))
-cycExportC = Circuit go
-  where 
-    go (fwd, (bwd, _)) = (bwd, (fwd, cycBit <$> fwd))
-
-    cycBit :: Maybe (PacketStreamM2S dataWidth RecordHeader) -> Maybe Bool
-    cycBit Nothing  = Nothing
-    cycBit (Just x)
-      -- | _wCount hdr == 0 && _rCount hdr == 0 = Nothing
-      | (_wCount hdr .|. _rCount hdr) == 0 = Nothing
-      | otherwise = Just $ _cyc hdr
-        where hdr = _meta x
+-- cycExportC :: Circuit (PacketStream dom dataWidth RecordHeader)
+--                       (PacketStream dom dataWidth RecordHeader
+--                       , CSignal dom (Maybe Bool))
+-- cycExportC = Circuit go
+--   where 
+--     go (fwd, (bwd, _)) = (bwd, (fwd, cycBit <$> fwd))
+--
+--     cycBit :: Maybe (PacketStreamM2S dataWidth RecordHeader) -> Maybe Bool
+--     cycBit Nothing  = Nothing
+--     cycBit (Just x)
+--       -- | _wCount hdr == 0 && _rCount hdr == 0 = Nothing
+--       | (_wCount hdr .|. _rCount hdr) == 0 = Nothing
+--       | otherwise = Just $ _cyc hdr
+--         where hdr = _meta x
 
 
 
@@ -420,7 +411,13 @@ traceC name = Circuit go
     printf :: (Show a, Show b) => String -> a -> b -> a
     printf dir f c = trace (dir <> " " <> show c <> " " <> name <> " " <> ": " <> show f) f
 
+-- TODO: traceC type function that instead of printing, adds a traceSignal1 to
+-- the fwd and bwd channels.
 
+
+-- type WBData bytes = BitVector (bytes*8)
+
+{-
 data WishboneMasterState (addrWidth :: Nat)
   -- TODO: Aborted
   --       Aborts will be handled by a component higher in the chain. No need to
@@ -444,8 +441,11 @@ data WishboneContext (addrWidth :: Nat) = WishboneContext
   }
   deriving (Generic, Show, ShowX, NFDataX)
 
+initialCtx = WishboneContext
+  { _fsmState = WriteOrReadAddr
+  , _prevCyc = False
+  }
 
-type WBData bytes = BitVector (bytes*8)
 
 -- TODO: Write WBM block
 -- NOTE: With a moore, the bwd=False situation can be simplified greatly, since
@@ -657,102 +657,6 @@ simWbm inputs = snd $ P.foldl fn (initialCtx, []) inputs
         (newCtx, result) = wishboneMasterT ctx input
 
 
-initialCtx = WishboneContext
-  { _fsmState = WriteOrReadAddr
-  , _prevCyc = False
-  }
-
-
-{-
-wishboneMasterT state (Nothing, (psb, _)) = (state, (psb, (Nothing, emptyWishboneM2S)))
-wishboneMasterT WriteOrReadAddr (Just x, (PacketStreamS2M{_ready}, WishboneS2M{}))
-  = (nextState, (PacketStreamS2M _ready, (out, emptyWishboneM2S)))
-  where
-    addr = resize $ pack $ _data x
-
-    wCount = _wCount (_meta x)
-    rCount = _rCount (_meta x)
-
-    -- The state if no backpressure is given
-    nextState'
-      | wCount > 0 = Write wCount addr
-      | rCount > 0 = Read rCount
-      | otherwise  = WriteOrReadAddr
-
-    nextState
-      | not _ready = WriteOrReadAddr
-      | otherwise  = nextState'
-    
-    out = case nextState' of
-      -- Pass data if this is a BaseRetAddr
-      Read _  -> Just x
-      _       -> Nothing
-wishboneMasterT st@Write{..} (Just x, (PacketStreamS2M{_ready}, WishboneS2M{..}))
-  = (nextState, (PacketStreamS2M _ready, (Nothing, wbOut)))
-  where
-    wCount = _writesLeft
-    wCount' = wCount - 1
-    rCount = _rCount (_meta x)
-
-    nextState
-      | not _ready    = st
-      | wCount' == 0  =
-        if rCount == 0
-        then WriteOrReadAddr
-        else ReadAddr
-      | otherwise     = Write wCount' addr'
-
-    -- TODO: This also should only happen if acked.
-    addr'
-      | _wff (_meta x) = _addr
-      | otherwise      = _addr + (natToNum @dataWidth)
-
-    byteEnable = _byteEn (_meta x)
-
-    wbOut = (emptyWishboneM2S @addrWidth)
-      { addr = _addr
-      -- , writeData = bitCoerce $ _data x
-      , busSelect   = resize byteEnable
-      , lock        = False
-      , busCycle    = True
-      , strobe      = True -- TODO: this should be var; for not ack
-      , writeEnable = True
-      }
-wishboneMasterT ReadAddr (Just x, PacketStreamS2M{_ready})
-  = (nextState, (PacketStreamS2M _ready, Just out))
-  where
-    -- Pass through the BaseRetAddr to the BaseWriteAddr field
-    -- wCount is set to 0. There is no way to get to this state with wCount > 0
-    meta = (_meta x) { _wCount = 0 }
-    out = x { _meta = meta }
-
-    rCount = _rCount (_meta x)
-
-    nextState
-      | not _ready = ReadAddr
-      | rCount > 0 = Read rCount
-      | otherwise  = WriteOrReadAddr
-wishboneMasterT st@Read{..} (Just x, PacketStreamS2M{_ready})
-  = (nextState, (PacketStreamS2M _ready, Just out))
-  where
-    out = x  -- { _data = repeat 0xaa }
-
-    rCount  = _readsLeft
-    rCount' = rCount - 1
-
-    nextState
-      | not _ready    = st
-      | rCount' == 0  = WriteOrReadAddr
-      | otherwise     = Read rCount'
--- wishboneMasterT Wait (Just x, _) = (nextState, (PacketStreamS2M True, Nothing))
---   where
---     -- TODO: Check for end of packet. If found, jump back to WriteOrReadAddr
---     -- TODO: Also check this in the ReadAddr Write and Read states, as this is
---     -- where it most likely happens
---     nextState = Wait
--}
-
-
 -- Reason for receiving the header in the state machine is so that we can send
 -- zeros that word. The depacketizer sends Nothing the cycle of the header. 
 --
@@ -773,52 +677,9 @@ wishboneMasterC = Circuit (B.second unbundle . fsm . B.second bundle)
   where
     fsm (fwd, bwd) = mealyB (wishboneMasterT @_ @addrWidth) initialCtx
       (fwd, bwd)
-
-    initialCtx = WishboneContext
-      { _fsmState = WriteOrReadAddr
-      , _prevCyc = False
-      }
+-}
 
 
-foo :: (KnownNat dataWidth) => Maybe (PacketStreamM2S dataWidth meta) -> BitVector (dataWidth * 8)
-foo Nothing  = oneBits
-foo (Just x) = bitCoerce $ _data x
-
-
--- Final circuit
-myCircuit
-  :: forall dom dataWidth addrWidth .
-  ( HiddenClockResetEnable dom
-  , KnownNat dataWidth
-  , KnownNat addrWidth
-  , Div (dataWidth * 8 + 7) 8 ~ dataWidth
-  , 4 <= dataWidth)
-  => Circuit (PacketStream dom dataWidth ())
-             ( PacketStream dom dataWidth ()
-             , Wishbone dom Standard addrWidth (WBData dataWidth))
-myCircuit = circuit $ \pm -> do
-  ebpkt <- etherboneDepacketizerC <| traceC "CircIn" -< pm
-
-  -- Filters out invalid, probe and record packets
-  [probe, record] <- receiverC -< ebpkt
-  
-  -- wbmOut <- traceC "WBMOut" <| wishboneMasterC <| traceC "WBMIn " <| recordDepacketizerC <| traceC "RcrdIn" -< record
-  -- rpkt <- traceC "InserterOut" <| recordInserterC -< wbmOut
-
-  [recordA, recordB] <- fanout -< record
-  (wbmPsOut, wbmWbOut) <- wishboneMasterC <| traceC "WBMIn " <| recordDepacketizerC <| traceC "RcrdIn" -< recordB
-
-  rA <- traceC "ByPass" -< recordA
-  rpkt <- traceC "Builder" <| recordBuilderC -< (wbmPsOut, rA)
-
-  probeOut <- probeHandlerC <| traceC "probeIn" -< probe
-
-  resp <- arbiterC -< [rpkt, probeOut]
-
-  udpTx <- etherbonePacketizerC -< resp
-
-  idC -< (udpTx, wbmWbOut)
-  -- etherbonePacketizerC -< ebpkt
 
 
 {-
@@ -872,110 +733,362 @@ myCircuit = circuit $ \pm -> do
 
 -}
 
-packet :: Bool -> Maybe (BitVector 32) -> Maybe (PacketStreamM2S 4 ())
-packet _ Nothing  = Nothing
-packet l (Just x) = Just $ PacketStreamM2S (bitCoerce x) lastIndex () False
-  where lastIndex = if l then Just 3 else Nothing
 
-
-streamInput :: [Maybe (PacketStreamM2S 4 ())]
-streamInput = 
-  [ packet False $ Just 0x4e6f11ff
-  , packet True  $ Just 0x00000086
-  , Nothing
-  , packet False $ Just 0x4e6f1044
-  , packet False $ Just 0xe80f0100
-  , packet False $ Just 0x11
-  , packet True $ Just 0x22
-  -- , packet True  $ Just 0x00
-  , Nothing
-  , packet False $ Just 0x4e6f1044
-  , packet True $ Just 0xe80f0000
-  --, packet False $ Just 0xcc
-  --, packet True  $ Just 0xdd
-  , Nothing
-  , packet False $ Just 0x4e6f1044
-  , packet False $ Just 0xe80f0100
-  , packet False $ Just 0xcc
-  , packet True  $ Just 0xdd
-  , Nothing
-  , packet True $ Just 0x00
-  , packet True $ Just 0x00
-  , packet False $ Just 0x4e6f1144
-  , packet False $ Just 0xbb
-  , packet False $ Just 0xcc
-  , packet True  $ Just 0xdd
-  , packet False $ Just 0x4e6f1044
-  , packet False $ Just 0xe80f0101
-  , packet False $ Just 0xaaaaaaaa
-  , packet False $ Just 0xbbbbbbbb
-  , packet False $ Just 0xCCCCCCCC
-  , packet True  $ Just 0xDDDDDDDD
-  , Nothing
-  , Nothing
-  , Nothing
-  , Nothing
-  , Nothing
-  , Nothing
-  , Nothing
-  , Nothing
-  , Nothing
-  , Nothing
-  ]
-
-
-{-
-data WishboneToPacketStream = WishboneToPacketStream
-  { stbPrev
-  , writeDataPrev
-  , }
-
-wishboneToPacketStream ::
-  ( KnownNat addrWidth
+-- Converts a Wishbone stream to a PacketStream
+-- Adds one cycle latency
+wishboneToPacketStream :: forall dom addrWidth dataWidth dat .
+  ( HiddenClockResetEnable dom
+  , KnownNat addrWidth
   , KnownNat dataWidth
   , BitPack dat
-  , BitSize dat ~ dataWidth * 8)
+  , BitSize dat ~ dataWidth * 8
+  , NFDataX dat
+  )
   => Circuit (Wishbone dom Standard addrWidth dat)
              (PacketStream dom dataWidth ())
-wishboneToPacketStream = Circuit (unbundle . fmap go . bundle)
+wishboneToPacketStream = Circuit (unbundle . mealy go emptyWishboneM2S . bundle)
   where
-    -- go
-    -- :: (WishboneM2S addrWidth (Div (BitSize dat + 7) 8) dat,
-    --     PacketStreamS2M)
-    --    -> (WishboneS2M dat, Maybe (PacketStreamM2S dataWidth ()))
-    go stbPrev (wbFwd@WishboneM2S{..}, PacketStreamS2M{_ready}) = (wbBwd, psFwd)
+    go :: WishboneM2S addressWidth selWidth dat
+      -> (WishboneM2S addressWidth selWidth dat, PacketStreamS2M)
+      -> (WishboneM2S addressWidth selWidth dat,
+          (WishboneS2M dat, Maybe (PacketStreamM2S dataWidth ())))
+    go prev (wbFwd, PacketStreamS2M{_ready}) = (newPrev, (wbBwd, psFwd))
       where
-        wbBwd = emptyWishboneS2M { acknowledge = _ready }
+        newPrev = wbFwd
 
-        ok = busCycle && strobe
+        okPrev = busCycle prev && strobe prev
+        ok = busCycle wbFwd && strobe wbFwd
+
+        wbBwd = emptyWishboneS2M { acknowledge = ok && okPrev && _ready }
+
+        isLast = if okPrev && not ok then Just 3 else Nothing
+
         psFwd
-          | ok = if writeEnable
-            then Just $ PacketStreamM2S (bitCoerce writeData) Nothing () False
+          | okPrev = if writeEnable prev
+            then Just $ PacketStreamM2S (bitCoerce (writeData prev)) isLast () False
             else Nothing
-          | stbPrev = Just $ 
           | otherwise = Nothing
--}
 
+-- This is not fully correct yet.
+-- If there is backpressure from the wishbone side, we still get new input data?
+-- Or not? This might be working fine.
+packetStreamToWishbone :: forall dom dataWidth addrWidth dat .
+  ( HiddenClockResetEnable dom
+  , KnownNat addrWidth
+  , KnownNat dataWidth
+  , BitSize dat ~ dataWidth * 8
+  , BitPack dat
+  , NFDataX dat
+  )
+  => Circuit (PacketStream dom dataWidth ())
+             (Wishbone dom Standard addrWidth dat)
+packetStreamToWishbone = Circuit (unbundle . mealy go False . bundle)
+  where
+    go :: ("CYC" ::: Bool)
+      -> (Maybe (PacketStreamM2S dataWidth meta), WishboneS2M dat)
+      -> ("CYC" ::: Bool, (PacketStreamS2M, WishboneM2S addrWidth (ByteSize dat) dat))
+    go cyc (psFwd, wbBwd) = (nextCyc, (PacketStreamS2M psBwd, wbFwd))
+      where
+        nextCyc = case psFwd of
+          Nothing -> cyc
+          Just x  -> isNothing (_last x)
+
+        term = acknowledge wbBwd || err wbBwd || retry wbBwd
+        psBwd = term && not (stall wbBwd)
+
+        dat :: dat
+        dat = case psFwd of
+          Nothing -> unpack 0
+          Just x  -> bitCoerce (_data x)
+
+        wbFwd = WishboneM2S
+          { addr = 0
+          , writeData = dat
+          , busSelect = oneBits
+          , lock = False
+          , busCycle = isJust psFwd || cyc
+          , strobe = isJust psFwd
+          , writeEnable = True
+          , cycleTypeIdentifier = Classic
+          , burstTypeExtension = LinearBurst
+          }
+
+
+-- Final circuit
+myCircuit
+  :: forall dom dataWidth addrWidth dat .
+  ( HiddenClockResetEnable dom
+  , KnownNat dataWidth
+  , KnownNat addrWidth
+  , 4 <= dataWidth
+  , addrWidth <= dataWidth * 8
+  , BitPack dat
+  , BitSize dat ~ dataWidth * 8
+  , NFDataX dat
+  , Show dat
+  , ShowX dat
+  )
+  => Circuit (PacketStream dom dataWidth ())
+             ( PacketStream dom dataWidth ()
+             , Wishbone dom Standard addrWidth dat)
+myCircuit = circuit $ \pm -> do
+  ebpkt <- etherboneDepacketizerC -< pm
+
+  -- Filters out invalid, probe and record packets
+  [probe, record] <- prefixName @"Recv" receiverC -< ebpkt
+
+  probeOut <- prefixName @"Probe" probeHandlerC -< probe
+  
+  [recordA, recordB] <- fanout -< record
+
+  recordDpkt <- traceC "ProcIn " <| recordDepacketizerC -< recordB
+  (procOut, wbmIn) <- prefixName @"Processor" recordProcessorC -< (recordDpkt, wbmDat)
+  (wbmDat, wbmBus, wbmErr) <- wishboneMasterC -< wbmIn
+
+  signalSink -< wbmErr
+
+  procOut' <- traceC "ProcOut" -< procOut
+  rpkt <- recordBuilderC -< (procOut', recordA)
+
+  resp <- arbiterC -< [rpkt, probeOut]
+
+  udpTx <- etherbonePacketizerC -< resp
+
+  idC -< (udpTx, wbmBus)
+  -- etherbonePacketizerC -< ebpkt
+
+  where
+    signalSink :: Circuit (CSignal dom a) ()
+    signalSink = Circuit go
+    go :: (Signal dom a, ()) -> (Signal dom (), ())
+    go _ = (pure (), ())
+
+
+wbCircuit
+  :: forall dom addrWidth dat .
+  ( HiddenClockResetEnable dom
+  , KnownNat addrWidth
+  , BitPack dat
+  , Bits dat
+  , NFDataX dat
+  , Show dat
+  , ShowX dat
+  , BitSize dat ~ ByteSize dat * 8
+  , 4 <= ByteSize dat
+  , addrWidth <= BitSize dat
+  )
+  => Circuit (Wishbone dom Standard addrWidth dat)
+             (Wishbone dom Standard addrWidth dat)
+wbCircuit = circuit $ \rx_i -> do
+  rx_ps <- wishboneToPacketStream @_ @_ @(ByteSize dat) -< rx_i
+  (tx_ps, wbBus) <- myCircuit @_ @_ @addrWidth -< rx_ps
+  tx_o <- packetStreamToWishbone -< tx_ps
+
+  wishboneScratchpad @_ @dat d4 -< wbBus
+
+  idC -< tx_o
 
 type DataWidth = 4
 type AddrWidth = 32
 
+fullCircuit :: forall dom .
+  ( HiddenClockResetEnable dom )
+  => Circuit (PacketStream dom DataWidth ())
+            (PacketStream dom DataWidth ())
+fullCircuit = circuit $ \rx -> do
+  (tx, wbBus) <- myCircuit -< rx
+  wishboneScratchpad @_ @WBData @AddrWidth d4 -< wbBus
+
+  idC -< tx
+
 topEntity
   :: "clk"  ::: Clock System
-  -> "rstn" ::: Reset System
+  -> "rst" ::: Reset System
   -> "en"   ::: Enable System
-  -> "rx" ::: Signal System (Maybe (PacketStreamM2S DataWidth ()))
-  -> ( "tx" ::: Signal System (Maybe (PacketStreamM2S DataWidth ()))
-     , "wb" ::: Signal System (WishboneM2S AddrWidth DataWidth (WBData DataWidth))
+  -> "rx_i" ::: Signal System (Maybe (PacketStreamM2S DataWidth ()))
+  -> "tx_i" ::: Signal System PacketStreamS2M
+  -> ( "rx_o" ::: Signal System PacketStreamS2M
+     , "tx_o" ::: Signal System (Maybe (PacketStreamM2S DataWidth ()))
      )
-topEntity clk rst en = fn
+topEntity clk rst en rx_i tx_i = fn
   where
-    fn x = out
+    fn = (rx_o, tx_o)
       where
-        (bwd, out) = toSignals circ (x, ( pure $ PacketStreamS2M True, pure $ (emptyWishboneS2M @(WBData DataWidth)) { readData=0, acknowledge=True }))
-    circ = exposeClockResetEnable (myCircuit @_ @DataWidth) clk rst en
+        (rx_o, tx_o) = toSignals circ (rx_i, tx_i)
+    circ = exposeClockResetEnable fullCircuit clk rst en
+
+
+
+-- 'read_scratch00': ('4e6f1044a00f00010000800000000000e80f00010000800100000004',
+topInput :: [Maybe (PacketStreamM2S DataWidth ())]
+topInput = 
+  [ pkt Nothing False
+  , pkt Nothing False
+  , pkt (Just 0x4e6f11ff) False
+  , pkt (Just 0x00000086) True
+  , pkt Nothing False
+  -- Two reads
+  , pkt (Just 0x4e6f1044) False
+  , pkt (Just 0x280f0002) False
+  , pkt (Just 0x00008000) False
+  , pkt (Just 0x00000004) False
+  , pkt (Just 0x00000008) True
+  , pkt Nothing False
+  , pkt Nothing False
+  -- Write then read
+  , pkt (Just 0x4e6f1044) False
+  , pkt (Just 0x280f0203) False
+  , pkt (Just 0x00000004) False
+  , pkt (Just 0xdeadbeef) False
+  , pkt (Just 0xcafecafe) False
+  , pkt (Just 0x00008000) False
+  , pkt (Just 0x00000004) False
+  , pkt (Just 0x00000004) False
+  , pkt (Just 0x00000008) True
+  ]
+  where
+    pkt
+      :: Maybe WBData -> Bool
+      -> Maybe (PacketStreamM2S DataWidth ())
+    pkt Nothing _ = Nothing
+    pkt (Just x) isLast = Just ps
+      where
+        ps = PacketStreamM2S (bitCoerce x) lst () False
+        lst
+          | isLast    = Just 3
+          | otherwise = Nothing
+
+simTop
+  :: [Maybe (PacketStreamM2S DataWidth ())]
+  -> [Maybe (PacketStreamM2S DataWidth ())]
+simTop = simulateC (withClockResetEnable @System clockGen resetGen enableGen fullCircuit) config
+-- simTop = simulate @System (bundle . top . unbundle)
+--   where
+--     top (a, b) = (hideClockResetEnable topEntity) a b
+
+fmtPacketStream :: (KnownNat dataWidth, Show meta) => Maybe (PacketStreamM2S dataWidth meta) -> String
+fmtPacketStream Nothing = "-"
+fmtPacketStream (Just PacketStreamM2S{..}) = 
+  "data: 0x" <> bv2hex (pack _data) <>
+  ", last: " <> show (isJust _last) <>
+  ", meta: " <> show _meta
+
+bv2hex :: (KnownNat n) => BitVector n -> String
+bv2hex bv = showHex bv ""
+
+-- mapM_ putStrLn $ P.map fmtPacketStream $ P.take 32 $ simTop topInput
+
+
+-- mapM_ print $ L.take 32 $ simulateC (withClockResetEnable @System clockGen resetGen enableGen (myCircuit)) config streamInput
+
+
+-- topEntity
+--   :: "clk"  ::: Clock System
+--   -> "rst" ::: Reset System
+--   -> "en"   ::: Enable System
+--   -> "rx_i" ::: Signal System (WishboneM2S AddrWidth DataWidth WBData)
+--   -> "tx_i" ::: Signal System (WishboneS2M WBData)
+--   -> ( "rx_o" ::: Signal System (WishboneS2M WBData)
+--      , "tx_o" ::: Signal System (WishboneM2S AddrWidth DataWidth WBData)
+--      )
+-- topEntity clk rst en rx_i tx_i = fn
+--   where
+--     fn = (rx_o, tx_o)
+--       where
+--         (rx_o, tx_o) = toSignals circ (rx_i, tx_i)
+--     circ = exposeClockResetEnable wbCircuit clk rst en
 
 makeTopEntity 'topEntity
+
+{-
+topInput :: [(WishboneM2S AddrWidth DataWidth WBData, WishboneS2M WBData)]
+topInput =
+  [ pkt Nothing False False
+  , pkt Nothing False False
+  , pkt (Just 0x4e6f11ff) True False
+  , pkt (Just 0x4e6f11ff) True False
+  , pkt (Just 0x00000086) True False
+  , pkt (Just 0x00000086) True False
+  , pkt (Just 0x00000086) True True
+  , pkt (Just 0x00000086) True False
+  , pkt (Just 0x00000086) True False
+  , pkt (Just 0x00000086) True False
+  , pkt (Just 0x00000086) True False
+  , pkt (Just 0x00000086) True False
+  ]
+  where
+    pkt
+      :: Maybe WBData
+      -> Bool -> Bool
+      -> (WishboneM2S AddrWidth DataWidth WBData, WishboneS2M WBData)
+    pkt Nothing  _ ack = (emptyWishboneM2S{busCycle=True}, emptyWishboneS2M {acknowledge=ack})
+    pkt (Just x) stb ack =
+      ( (emptyWishboneM2S @_ @WBData) {writeData=x, writeEnable=True, strobe=stb, busCycle=True}
+      , emptyWishboneS2M {acknowledge=ack})
+
+simTop
+  :: [(WishboneM2S AddrWidth DataWidth WBData, WishboneS2M WBData)]
+  -> [(WishboneS2M WBData, WishboneM2S AddrWidth DataWidth WBData)]
+simTop = simulate @System (bundle . top . unbundle)
+  where
+    top (a, b) = (hideClockResetEnable topEntity) a b
+-}
+
+-- packet :: Bool -> Maybe (BitVector 32) -> Maybe (PacketStreamM2S 4 ())
+-- packet _ Nothing  = Nothing
+-- packet l (Just x) = Just $ PacketStreamM2S (bitCoerce x) lastIndex () False
+--   where lastIndex = if l then Just 3 else Nothing
+--
+--
+-- streamInput :: [Maybe (PacketStreamM2S 4 ())]
+-- streamInput = 
+--   [ packet False $ Just 0x4e6f11ff
+--   , packet True  $ Just 0x00000086
+--   , Nothing
+--   , packet False $ Just 0x4e6f1044
+--   , packet False $ Just 0xe80f0100
+--   , packet False $ Just 0x11
+--   , packet True $ Just 0x22
+--   -- , packet True  $ Just 0x00
+--   , Nothing
+--   , packet False $ Just 0x4e6f1044
+--   , packet True $ Just 0xe80f0000
+--   --, packet False $ Just 0xcc
+--   --, packet True  $ Just 0xdd
+--   , Nothing
+--   , packet False $ Just 0x4e6f1044
+--   , packet False $ Just 0xe80f0100
+--   , packet False $ Just 0xcc
+--   , packet True  $ Just 0xdd
+--   , Nothing
+--   , packet True $ Just 0x00
+--   , packet True $ Just 0x00
+--   , packet False $ Just 0x4e6f1144
+--   , packet False $ Just 0xbb
+--   , packet False $ Just 0xcc
+--   , packet True  $ Just 0xdd
+--   , packet False $ Just 0x4e6f1044
+--   , packet False $ Just 0xe80f0101
+--   , packet False $ Just 0xaaaaaaaa
+--   , packet False $ Just 0xbbbbbbbb
+--   , packet False $ Just 0xCCCCCCCC
+--   , packet True  $ Just 0xDDDDDDDD
+--   , Nothing
+--   , Nothing
+--   , Nothing
+--   , Nothing
+--   , Nothing
+--   , Nothing
+--   , Nothing
+--   , Nothing
+--   , Nothing
+--   , Nothing
+--   ]
+
+-- main :: IO ()
+-- main = do
+--   let out = topEntity systemClockGen 
+  
 
 
 -- Simulate with
