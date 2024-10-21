@@ -2,6 +2,12 @@ packages:
   clash-tutorial.cabal
   ../clash-protocols/clash-protocols
   ../clash-protocols/clash-protocols-base
+  ../../clash-cores
+  ../../clash-compiler/clash-prelude
+  ../../clash-compiler/clash-prelude-hedgehog
+  ../../clash-compiler/clash-lib
+  ../../clash-compiler/clash-ghc
+  ../../clash-compiler/tests
 
 write-ghc-environment-files: always
 
@@ -12,3 +18,7 @@ source-repository-package
 
 -- Eliminates the need for `--enable-tests`, which is needed for HLS.
 tests: true
+
+allow-newer:
+  clash-protocols:tasty
+  -- clash-tutorial:tasty

@@ -137,15 +137,6 @@ hardwiredWb val = fromSignals circ
         ack = (busCycle <$> wb) .&&. (strobe <$> wb)
     out ack = (emptyWishboneS2M @a) { readData=val, acknowledge=ack }
 
-instance (IdleCircuit a, KnownNat n) => IdleCircuit (Vec n a) where
-  idleFwd _ = repeat $ idleFwd (Proxy @a)
-  idleBwd _ = repeat $ idleBwd (Proxy @a)
-
-
-instance IdleCircuit () where
-  idleFwd _ = ()
-  idleBwd _ = ()
-
 myCircuit
   :: forall dom . (HiddenClockResetEnable dom)
   => Circuit (Wishbone dom 'Standard 32 WBWord) ()

@@ -303,13 +303,15 @@ async def test_ack_on_rx(dut):
     probe = '4e6f11ff00000086'
     cocotb.start_soon(eb_dut.send(bytes.fromhex(probe)))
 
+    await Timer(100, 'ns')
+    
     await RisingEdge(dut.clk)
     await RisingEdge(dut.clk)
     assert(dut.rx_ack_o.value == 1)
 
 
-# @cocotb.test(skip=True)
 @cocotb.test(skip=True)
+# @cocotb.test(skip=False)
 async def test_socket(dut):
     log = logger.getChild('Socket')
     eb_dut = EtherboneDUT(dut, log=log)

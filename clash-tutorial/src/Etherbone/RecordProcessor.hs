@@ -1,6 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
 
-
 module Etherbone.RecordProcessor where
 
 import Clash.Prelude
@@ -12,6 +11,8 @@ import Etherbone.WishboneMaster (WishboneMasterInput (..), ByteSize, WBData)
 import qualified Protocols.Df as Df
 import qualified Data.Bifunctor as B
 import qualified Prelude as P
+import Data.Maybe
+import Debug.Trace
 
 
 data RecordProcessorState addrWidth
@@ -48,61 +49,36 @@ recordProcessorT state ((Nothing, _), _)
 recordProcessorT state ((Just psIn, df), (bpOut@PacketStreamS2M{_ready}, ()))
   = (nextState, ((PacketStreamS2M bpIn, Ack ack), (psOut, wbOut)))
   where
-    -- Do _not_ progress to the next state if
-    --   we receive backpressure
-    --   or the WBM is still busy with an operation.
-    -- TODO: Should I hold the state with backpressure, also for write addr?
-    nextState = case (state, df, _ready) of
-      (Write _ _, Df.NoData, _) -> state
-      (Write _ _, _, False)     -> state
-      (Read _,    Df.NoData, _) -> state
-      (Read _,    _, False)     -> state
-      (ReadAddr,  _, False)     -> state
-      (WriteOrReadAddr,  _, False)     -> state
-      _                         -> state'
+    -- Do _not_ progress to the next state if we receive backpressure.
+    -- If the WBM is still busy with an operation, `fsm` does not progress the
+    -- state.
+    nextState = if _ready then state' else trace (show state) state
     state' = fsm state psIn df
 
     psWord = pack (_data psIn)
 
-    -- No need to check the _ready flag in `bpIn` and `ack`, since this is
-    -- already checked when setting `nextState`.
-    -- TODO: Rewrite this to (state, _ready, df)
-    bpIn = case (state, nextState) of
-      (Write a _, Write b _) -> a /= b
-      (Write _ _, _)         -> True
-      (Read a, Read b)       -> a /= b
-      (Read _, _)            -> True
-      (WriteOrReadAddr, Read _) -> True
-      (WriteOrReadAddr, Write _ _) -> True
-      (ReadAddr, Read _) -> True
-      _                      -> False
+    -- Whenever the WBM is busy, give backpressure.
+    -- Otherwise forward the backpressure from right to left
+    --
+    -- If WBM provides Data but we receive backpressure, we should forward this
+    -- backpressure as otherwise words will be lost.
+    bpIn = case (state, df) of
+      (Write _ _, Df.NoData) -> False
+      (Read _,    Df.NoData) -> False
+      _                      -> _ready
 
-    -- ack = case (state, nextState) of
-    --   (Write a _, Write b _) -> a /= b
-    --   (Write _ _, _)         -> True
-    --   (Read a, Read b)       -> a /= b
-    --   (Read _, _)            -> True
-    --   _                      -> False
-
+    -- Only Ack if we do not receive backpressure
+    -- This results in the WBM waiting until the pipeline is ready again.
     ack = case (state, df) of
       (Write _ _, Df.Data _) -> _ready
       (Read _,    Df.Data _) -> _ready
       _                      -> False
 
-    -- Following cases should send Nothing (handled under _)
-    -- ((Read _), _, Df.NoData)
-    -- ((Write _ _), _, _)
-    -- (WriteOrReadAddr, WriteOrReadAddr, _)
-    -- (WriteOrReadAddr, (Write _ _), _)
-    -- (WriteOrReadAddr, ReadAddr, _)
-    --
     -- Should only send a fragment if
     --   BaseRetAddr is being read
     --   or Read operation from WBM is finished
     --
-    -- NOTE: Here `state'` is checked rather than `nextState`. This way the
-    -- outgoing fragment is always the same, regardless of backpressure.
-    -- However, if the WBM is reading, is first busy and then finishes while
+    -- If the WBM is reading, is first busy and then finishes while
     -- we are receiving backpressure, the output fragment changes from Nothing
     -- to the read data.
     psOut = case (state, state', df) of
@@ -111,24 +87,28 @@ recordProcessorT state ((Just psIn, df), (bpOut@PacketStreamS2M{_ready}, ()))
       (ReadAddr, _, _)             -> Just $ psIn { _data = unpack psWord }
       -- Read op finished
       (Read _, _, Df.Data d)       -> Just $ psIn { _data = bitCoerce d }
-      _ -> Nothing
+      _                            -> Nothing
 
-    -- The 1 cases below are the situations where the last operation of a Record
-    -- is being handled. If the drop cyc flag is set in the RecordHeader, this
-    -- is the operation after which the Cyc line should be dropped.
-    -- TODO: Also drop if this is the very last fragment of the packet. Also in
-    -- the future case that a EB packet is split into separate packets for each
-    -- Record.
-    wbOut = case (state, nextState) of
-      (Write 1 a, _) -> Just $ WishboneMasterInput a (Just dat) sel dropCyc
-      (Read 1, _)    -> Just $ WishboneMasterInput addr Nothing sel dropCyc
-      (Write _ a, _) -> Just $ WishboneMasterInput a (Just dat) sel False
-      (Read _, _)    -> Just $ WishboneMasterInput addr Nothing sel False
-      _ -> Nothing
+    -- If the drop cyc flag is set in the RecordHeader, the busCycle line should
+    -- be deasserted after the last entry in the record.
+    wbOut = case state of
+      -- dropCyc takes i + _rCount, since cyc should be kept high after a write
+      -- if there are still reads to do.
+      Write i a -> Just $ WishboneMasterInput a (Just dat) sel (dropCyc $ i + _rCount (_meta psIn))
+      Read i    -> Just $ WishboneMasterInput addr Nothing sel (dropCyc i)
+      _         -> Nothing
       where
         dat = bitCoerce (_data psIn)
         sel = resize $ _byteEn (_meta psIn)
-        dropCyc = _cyc (_meta psIn)
+
+        -- Drop cyc if
+        --   This is the last packet (safety measure)
+        --   or
+        --   This is the last entry from this record, and the dropCyc flag is
+        --   set in the record header.
+        -- TODO: MultiRecord: Once multiple records are handled, check the EB packet last
+        --  flag rather than the current record packet's _last flag.
+        dropCyc i = isJust (_last psIn) || (i == 1 && _cyc (_meta psIn))
 
         addr :: BitVector addrWidth
         addr = resize psWord
@@ -144,6 +124,7 @@ recordProcessorT state ((Just psIn, df), (bpOut@PacketStreamS2M{_ready}, ()))
         rCount = _rCount _meta
 
         st'
+          | isJust _last = WriteOrReadAddr
           | wCount > 0 = Write wCount $ resize psWord
           | rCount > 0 = Read rCount
           | otherwise = st
@@ -160,6 +141,7 @@ recordProcessorT state ((Just psIn, df), (bpOut@PacketStreamS2M{_ready}, ()))
           | otherwise  = _addr + (natToNum @dataWidth)
 
         st'
+          | isJust _last = WriteOrReadAddr
           | wCount' == 0 = if rCount == 0 then WriteOrReadAddr else ReadAddr
           | otherwise = Write wCount' addr'
 
@@ -168,16 +150,18 @@ recordProcessorT state ((Just psIn, df), (bpOut@PacketStreamS2M{_ready}, ()))
         rCount = _rCount _meta
 
         st'
+          | isJust _last = WriteOrReadAddr
           | rCount > 0 = Read rCount
           | otherwise  = WriteOrReadAddr
 
     fsm st@Read{} _ Df.NoData = st
-    fsm Read{..} (PacketStreamM2S{}) (Df.Data _) = st'
+    fsm Read{..} (PacketStreamM2S{..}) (Df.Data _) = st'
       where
         rCount = _readsLeft
         rCount' = rCount - 1
 
         st'
+          | isJust _last = WriteOrReadAddr
           | rCount' == 0 = WriteOrReadAddr
           | otherwise    = Read rCount'
 

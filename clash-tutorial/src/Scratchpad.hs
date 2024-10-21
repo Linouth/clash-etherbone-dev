@@ -4,6 +4,7 @@ import Clash.Prelude
 import Protocols
 import Protocols.Wishbone
 import Data.Proxy
+import Debug.Trace
 
 
 type WBWord = Unsigned 32
@@ -35,8 +36,7 @@ wishboneScratchpad SNat = fromSignals circ
                       , writeData x
                       )
           where
-            -- Alt approach: snatToNum (SNat @(CLog 2 (BitSize a `DivRU` 8)))
-            bitsToShift = fromInteger $ natVal (Proxy :: Proxy (CLog 2 (BitSize a `DivRU` 8)))
+            bitsToShift = natToNum @(CLog 2 (BitSize a `DivRU` 8))
             index = shiftR (addr x) bitsToShift
 
         -- @a here is a type application, forcing 'dat' from 'emptyWishboneS2M'
@@ -54,8 +54,8 @@ scratchpad
   :: forall n dom a . (KnownNat n, HiddenClockResetEnable dom, NFDataX a, BitPack a)
   => Signal dom (Bool, Index n, a)
   -> Signal dom a
--- scratchpad = mealy scratchpadT (repeat zeroBits)
-scratchpad = mealy scratchpadT (map unpack $ iterateI (+1) 0)
+scratchpad = mealy scratchpadT (repeat $ unpack 0)
+-- scratchpad = mealy scratchpadT (map unpack $ iterateI (+1) 0)
 
 
 -- n: number of registers in regfile

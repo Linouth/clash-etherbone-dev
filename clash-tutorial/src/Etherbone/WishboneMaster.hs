@@ -1,7 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
 
-
-
 module Etherbone.WishboneMaster where
 
 import Clash.Prelude
@@ -36,9 +34,16 @@ data WishboneMasterState addrWidth selWidth dat
 
 -- TODO: Property test this transfer function
 --
--- need something special?
 -- Backpressure is generated and handled through the Df line. If the Processor
 -- is receives backpressure, it does not sent an Ack to the WBM.
+--
+-- This state machine should be abortable. We can use the Maybe Input line. As
+-- long as this is Just, do the Wishbone transaction. If it becomes Nothing
+-- while still busy, abort the transaction (cyc and stb low).
+-- If waiting for ack, this can also be aborted with Nothing on Fwd.
+-- If waiting for op this does not work, as it can wait in
+--
+-- Option 2, add a second signal on the fwd line, telling WBM to abort.
 wishboneMasterT ::
   ( KnownNat addrWidth
   , BitPack dat
@@ -69,10 +74,9 @@ wishboneMasterT state (input, (ack, wbBwd, ()), count)
     --   (Busy _, WaitForAck _ dat) -> Df.Data dat
     --   (WaitForAck _ dat, _)      -> Df.Data dat
     --   _                          -> Df.NoData
-    retData = case (state, wbAck) of
-      --(Busy _, True)        -> Df.Data (readData wbBwd)
-      (WaitForAck _ dat, _) -> Df.Data dat
-      _                     -> Df.NoData
+    retData = case state of
+      WaitForAck _ dat -> Df.Data dat
+      _                -> Df.NoData
 
     retErr = case (state, newState) of
       (Busy _, WaitForAck _ _) -> Just $ boolToBit wbErr
