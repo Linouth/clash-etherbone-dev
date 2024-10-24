@@ -54,8 +54,8 @@ scratchpad
   :: forall n dom a . (KnownNat n, HiddenClockResetEnable dom, NFDataX a, BitPack a)
   => Signal dom (Bool, Index n, a)
   -> Signal dom a
-scratchpad = mealy scratchpadT (repeat $ unpack 0)
--- scratchpad = mealy scratchpadT (map unpack $ iterateI (+1) 0)
+-- scratchpad = mealy scratchpadT (repeat $ unpack 0)
+scratchpad = mealy scratchpadT (map unpack $ iterateI (+1) 0)
 
 
 -- n: number of registers in regfile

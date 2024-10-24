@@ -21,6 +21,7 @@ data RecordProcessorState addrWidth
           , _addr :: BitVector addrWidth }
   | ReadAddr
   | Read  { _readsLeft :: Unsigned 8 }
+  | Aborted
   deriving (Generic, NFDataX, Show, ShowX)
 
 
@@ -65,6 +66,11 @@ recordProcessorT state ((Just psIn, df), (bpOut@PacketStreamS2M{_ready}, ()))
     bpIn = case (state, df) of
       (Write _ _, Df.NoData) -> False
       (Read _,    Df.NoData) -> False
+      -- ? Is there backpressure missing for the one cycle where _abort is set
+      -- high? It can happen that that also has _last set and then we will miss
+      -- it.
+      -- TODO: Fix, or think of this in the new implementation.
+      (Aborted,   Df.NoData) -> False
       _                      -> _ready
 
     -- Only Ack if we do not receive backpressure
@@ -72,6 +78,7 @@ recordProcessorT state ((Just psIn, df), (bpOut@PacketStreamS2M{_ready}, ()))
     ack = case (state, df) of
       (Write _ _, Df.Data _) -> _ready
       (Read _,    Df.Data _) -> _ready
+      (Aborted,   Df.Data _) -> True
       _                      -> False
 
     -- Should only send a fragment if
@@ -118,6 +125,7 @@ recordProcessorT state ((Just psIn, df), (bpOut@PacketStreamS2M{_ready}, ()))
       -> PacketStreamM2S dataWidth RecordHeader
       -> Df.Data dat
       -> RecordProcessorState addrWidth
+    fsm _ PacketStreamM2S{_abort = True} _ = Aborted
     fsm st@WriteOrReadAddr (PacketStreamM2S{..}) _ = st'
       where
         wCount = _wCount _meta
@@ -164,6 +172,12 @@ recordProcessorT state ((Just psIn, df), (bpOut@PacketStreamS2M{_ready}, ()))
           | isJust _last = WriteOrReadAddr
           | rCount' == 0 = WriteOrReadAddr
           | otherwise    = Read rCount'
+    fsm st@Aborted PacketStreamM2S{} Df.NoData = st
+    fsm st@Aborted PacketStreamM2S{..} (Df.Data _) = st'
+      where
+        st'
+          | isJust _last = WriteOrReadAddr
+          | otherwise = st
 
 
 recordProcessorC ::

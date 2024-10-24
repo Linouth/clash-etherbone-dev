@@ -12,7 +12,7 @@ import Etherbone.RecordBuilder (recordBuilderC)
 import Clash.Prelude
 
 
-recordHandlerC ::
+recordHandlerC :: forall dom dataWidth addrWidth dat .
   ( HiddenClockResetEnable dom
   , KnownNat dataWidth
   , KnownNat addrWidth
@@ -28,14 +28,15 @@ recordHandlerC ::
              ( PacketStream dom dataWidth EBHeader
              , Wishbone dom Standard addrWidth dat)
 recordHandlerC = circuit $ \psIn -> do
-  [recordBypass, record] <- fanout -< psIn
-  dpkt <- recordDepacketizerC -< record
+  dpkt <- recordDepacketizerC -< psIn
+  [bypass, record] <- fanout -< dpkt
 
-  (procOut, wbmIn) <- recordProcessorC -< (dpkt, wbmDat)
+  (procOut, wbmIn) <- recordProcessorC -< (record, wbmDat)
   (wbmDat, wbmBus, wbmErr) <- wishboneMasterC -< wbmIn
 
+  bypass' <- traceC "bypass" -< bypass
   procOut' <- traceC "ProcOut/BuilderIn" -< procOut
-  psOut <- recordBuilderC -< (procOut', recordBypass)
+  psOut <- recordBuilderC (SNat @addrWidth) -< (procOut', bypass')
   signalSink -< wbmErr
 
   idC -< (psOut, wbmBus)

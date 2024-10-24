@@ -37,7 +37,7 @@ recordPacketizerC
 recordPacketizerC = packetizerC (const ebHeader) metaHeaderMap
   where
     ebHeader = EBHeader { _magic    = 0x4e6f
-                        , _version  = 1
+                        , _version  = fromIntegral etherboneVersion
                         , _res      = undefined
                         , _nr       = True
                         , _pr       = False
@@ -707,7 +707,7 @@ topInput =
   , pkt (Just 0x4e6f11ff) False
   , pkt (Just 0x00000086) True
   , pkt Nothing False
-  -- Two reads
+  -- Two Writes
   --, pkt (Just 0x4e6f1044) False
   , pkt (Just 0x4e6f1044) False
   , pkt (Just 0x280f0200) False
@@ -737,7 +737,7 @@ topInput =
       where
         ps = PacketStreamM2S (bitCoerce x ++ repeat 0) lst () False
         lst
-          | isLast    = Just 3
+          | isLast    = Just 4
           | otherwise = Nothing
 
 simTop

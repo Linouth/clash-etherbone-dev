@@ -7,6 +7,10 @@ import Protocols
 import Protocols.PacketStream
 import Debug.Trace
 
+
+etherboneVersion :: Natural
+etherboneVersion = 1
+
 data EBHeader = EBHeader
   { _magic    :: Unsigned 16
   , _version  :: Unsigned 4
@@ -83,7 +87,7 @@ receiverC SNat = packetDispatcherC (probePred :> recordPred :> Nil)
     isValid = and . sequenceA [validMagic, validVersion, validAddr, validPort]
 
     validMagic    = (== 0x4e6f) . _magic
-    validVersion  = (== 1) . _version
+    validVersion  = (== fromIntegral etherboneVersion) . _version
     validAddr     = (/= 0) . (.&. addrSizeMask) . _addrSize
     validPort     = (/= 0) . (.&. portSizeMask) . _portSize
 

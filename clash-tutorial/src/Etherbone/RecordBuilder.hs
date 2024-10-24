@@ -20,16 +20,19 @@ recordRxToTx hdr = hdr { _bca = False
                        , _wCount = _rCount hdr
                        }
 
-ebTx :: EBHeader
-ebTx = EBHeader { _magic    = 0x4e6f
-                , _version  = 1
+ebTx :: forall dataWidth addrWidth. SNat dataWidth -> SNat addrWidth -> EBHeader
+ebTx SNat SNat = EBHeader { _magic    = 0x4e6f
+                , _version  = fromIntegral etherboneVersion
                 , _res      = 0
                 , _nr       = True
                 , _pr       = False
                 , _pf       = False
-                , _addrSize = 0b0100
-                , _portSize = 0b0100
+                , _addrSize = addrSizeMask
+                , _portSize = portSizeMask
                 }
+  where
+    portSizeMask = sizeMask $ natToInteger @dataWidth
+    addrSizeMask = sizeMask $ natToInteger @(Div addrWidth 8)
 
 
 data RecordBuilderState
@@ -45,18 +48,19 @@ data RecordBuilderState
   -- ^ Sends zero padding. Required for wCount > 0 case
   | BuilderHeader       { _header :: RecordHeader }
   -- ^ Sends the header. Required for wCount > 0 case
-  | BuilderPassthrough  { _header :: RecordHeader }
+  | BuilderPassthrough
+  | BuilderWaitForLast
   deriving (Generic, NFDataX, Show, ShowX)
 
--- Last goes through WBM channel for reads.
--- TODO: For writes it should go through the bypass-channel
--- TODO: Aborts go through the bypass-channel. Nothing comes from the WBM
--- channel on abort
-recordBuilderT
-  :: forall dataWidth . (KnownNat dataWidth, 4 <= dataWidth)
-  => RecordBuilderState 
-  -> ( (Maybe (PacketStreamM2S dataWidth RecordHeader)
-       , Maybe (PacketStreamM2S dataWidth EBHeader)
+recordBuilderT :: forall dataWidth addrWidth .
+  ( KnownNat dataWidth
+  , KnownNat addrWidth
+  , 4 <= dataWidth
+  )
+  => SNat addrWidth
+  -> RecordBuilderState 
+  -> ( ( Maybe (PacketStreamM2S dataWidth RecordHeader) -- Main
+       , Maybe (PacketStreamM2S dataWidth RecordHeader) -- Bypass
        )
      , PacketStreamS2M
      )
@@ -64,42 +68,38 @@ recordBuilderT
      , ( (PacketStreamS2M, PacketStreamS2M)
        , Maybe (PacketStreamM2S dataWidth EBHeader) )
      )
-recordBuilderT BuilderInit ((_, Nothing), _)
-  -- = errorX "BuilderInit state, but no header data given. This should not happen?"
+recordBuilderT SNat _ ((_, Just PacketStreamM2S{ _abort = True, _last }), PacketStreamS2M{_ready})
+  = (BuilderInit, ( (PacketStreamS2M _ready, PacketStreamS2M _ready), Just out ))
+  where
+    -- TODO: Check if it is possible for an abort to _not_ be the last fragment
+    out = PacketStreamM2S (repeat 0) _last ebTx' True
+    ebTx' = ebTx (SNat @dataWidth) (SNat @addrWidth)
+recordBuilderT SNat BuilderInit ((_, Nothing), _)
   = (BuilderInit, ( (PacketStreamS2M True, PacketStreamS2M True), Nothing ))
-recordBuilderT BuilderInit ((_, Just hdr'), PacketStreamS2M{_ready})
-  = (trace (show nextState) nextState, ( (PacketStreamS2M _ready, PacketStreamS2M _ready), Just out ))
+recordBuilderT SNat BuilderInit ((_, Just bypass), PacketStreamS2M{_ready})
+  = (trace (show nextState) nextState, ( (PacketStreamS2M False, PacketStreamS2M _ready), Just out ))
   where
     (nextState', out)
-      | _wCount hdr > 0 = (BuilderPad hdr,         outZeros)
-      | otherwise       = (BuilderPassthrough hdr, outHeader)
+      | _wCount hdr > 0 = (BuilderPad hdr,     outZeros)
+      | otherwise       = (BuilderPassthrough, outHeader)
 
     nextState
-      | not _ready          = BuilderInit
-      | isJust (_last hdr') = BuilderInit
-      | otherwise           = nextState'
+      | not _ready     = BuilderInit
+      | isJust outLast = BuilderInit
+      | otherwise      = nextState'
 
-    wCount = _wCount hdr
-    rCount = _rCount hdr
-    isLast = wCount == 0 && rCount == 0
+    hdr = _meta bypass
 
-    outLast =
-      if isLast
-      then Just (natToNum @(dataWidth-1))
-      else Nothing
-
-    outZeros = PacketStreamM2S (repeat 0) outLast ebTx False
-    outHeader = PacketStreamM2S (dat ++ repeat @(dataWidth-4) 0) outLast ebTx False
+    outLast = _last bypass
+    outZeros = PacketStreamM2S (repeat 0) outLast ebTx' False
+    outHeader = PacketStreamM2S (dat ++ repeat @(dataWidth-4) 0) outLast ebTx' False
+    ebTx' = ebTx (SNat @dataWidth) (SNat @addrWidth)
     dat = bitCoerce (recordRxToTx hdr)
-
-    -- This essentially replaces depacketizerToDf
-    hdr :: RecordHeader
-    hdr = bitCoerce $ takeI @_ @(dataWidth-4) (_data hdr')
-recordBuilderT BuilderPad{_header} ((_, _), PacketStreamS2M{_ready})
+recordBuilderT SNat st@BuilderPad{_header} ((_, _), PacketStreamS2M{_ready})
   = (trace (show nextState) nextState, ( (PacketStreamS2M _ready, PacketStreamS2M True), Just outZeros ))
   where
     nextState
-      | not _ready   = BuilderPad _header
+      | not _ready   = st
       | wCount' == 0 = BuilderHeader header'
       | otherwise    = BuilderPad header'
 
@@ -107,14 +107,30 @@ recordBuilderT BuilderPad{_header} ((_, _), PacketStreamS2M{_ready})
     wCount' = wCount - 1
     header' = _header { _wCount = wCount' }
 
-    outZeros = PacketStreamM2S (repeat 0) Nothing ebTx False
-recordBuilderT st@BuilderHeader{_header} ((_, _), PacketStreamS2M{_ready})
+    outZeros = PacketStreamM2S (repeat 0) Nothing ebTx' False
+    ebTx' = ebTx (SNat @dataWidth) (SNat @addrWidth)
+recordBuilderT SNat st@BuilderHeader{_header} ((_, maybeBypass), PacketStreamS2M{_ready})
   = (trace (show nextState) nextState, ( (PacketStreamS2M _ready, PacketStreamS2M True), Just outHeader ))
   where
+  -- Problem here. it can happen that the header is written while there is still
+  -- a bypass signal coming in. If we then jump to Init the FSM will run again.
+  -- If we only have writes and
+  --  - bypass is still Just: wait until the bypass signals a _last
+  --  - bypass is Nothing: then we can safely jump to Init
+  --
+  -- Actually, since we do not do pipelined (yet) the bypass and the being
+  -- processed signal should be the same. So looking at the bypass _should_ be
+  -- sufficient?
+  -- Either way we need a new state where it just waits until _last bypass is
+  -- set
+  --
+  -- Fixed but very hacky
     nextState
-      | not _ready  = st
-      | isLast      = BuilderInit
-      | otherwise   = BuilderPassthrough _header
+      | not _ready            = st
+      | rCount > 0            = BuilderPassthrough
+      | otherwise = case maybeBypass >>= _last of
+        Nothing -> BuilderWaitForLast
+        Just _  -> BuilderInit
 
     rCount = _rCount _header
     isLast = rCount == 0
@@ -123,12 +139,13 @@ recordBuilderT st@BuilderHeader{_header} ((_, _), PacketStreamS2M{_ready})
       PacketStreamM2S
         (dat ++ repeat @(dataWidth-4) 0)
         (if isLast then Just (natToNum @dataWidth) else Nothing)
-        ebTx
+        ebTx'
         False
+    ebTx' = ebTx (SNat @dataWidth) (SNat @addrWidth)
     dat = bitCoerce (recordRxToTx _header)
-recordBuilderT st@BuilderPassthrough{_header} ((Nothing, _), _)
-  = (st, ( (PacketStreamS2M True, PacketStreamS2M True), Nothing ))
-recordBuilderT st@BuilderPassthrough{_header} ((Just x, _), PacketStreamS2M{_ready})
+recordBuilderT SNat st@BuilderPassthrough ((Nothing, _), PacketStreamS2M{_ready})
+  = (st, ( (PacketStreamS2M _ready, PacketStreamS2M True), Nothing ))
+recordBuilderT SNat st@BuilderPassthrough ((Just x, _), PacketStreamS2M{_ready})
   = (nextState, ( (PacketStreamS2M _ready, PacketStreamS2M True), Just out))
   where
     nextState
@@ -136,17 +153,30 @@ recordBuilderT st@BuilderPassthrough{_header} ((Just x, _), PacketStreamS2M{_rea
       | isJust (_last x) = BuilderInit
       | otherwise        = st
 
-    out = x { _meta = ebTx }
+    out = x { _meta = ebTx' }
+    ebTx' = ebTx (SNat @dataWidth) (SNat @addrWidth)
+recordBuilderT SNat st@BuilderWaitForLast ((_, Nothing), PacketStreamS2M{_ready})
+  = (st, ( (PacketStreamS2M _ready, PacketStreamS2M _ready), Nothing ))
+recordBuilderT SNat st@BuilderWaitForLast ((_, Just b), PacketStreamS2M{_ready})
+  = (nextState, ( (PacketStreamS2M _ready, PacketStreamS2M _ready), Nothing ))
+  -- NOTE: Bypass is also backpressured if fwd has backpressure. This is
+  -- required! Otherwise we might miss the _last signal
+  where
+    nextState
+      | not _ready        = st
+      | isJust (_last b)  = BuilderInit
+      | otherwise         = st
 
 recordBuilderC
-  :: forall dom dataWidth .
-  ( HiddenClockResetEnable dom, KnownNat dataWidth, 4 <= dataWidth)
-  -- => Circuit (PacketStream dom dataWidth RecordHeader, Df dom RecordHeader)
-  => Circuit (PacketStream dom dataWidth RecordHeader, PacketStream dom dataWidth EBHeader)
+  :: forall dom dataWidth addrWidth .
+  ( HiddenClockResetEnable dom
+  , KnownNat dataWidth
+  , KnownNat addrWidth
+  , 4 <= dataWidth
+  )
+  => SNat addrWidth
+  -> Circuit (PacketStream dom dataWidth RecordHeader, PacketStream dom dataWidth RecordHeader)
              (PacketStream dom dataWidth EBHeader)
-recordBuilderC = Circuit (B.first unbundle . go . B.first bundle)
+recordBuilderC SNat = Circuit (B.first unbundle . go . B.first bundle)
   where
-    -- go = mealyB recordBuilderT BuilderInit
-    go = mealyB fn BuilderInit
-      where
-        fn s inp = recordBuilderT s inp
+    go = mealyB (recordBuilderT $ SNat @addrWidth) BuilderInit
