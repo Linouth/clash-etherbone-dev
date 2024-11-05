@@ -94,6 +94,7 @@ library
   hs-source-dirs: src
   exposed-modules:
     Demo
+    WishboneBridge
     Scratchpad
     Top
     -- TestPacketStream

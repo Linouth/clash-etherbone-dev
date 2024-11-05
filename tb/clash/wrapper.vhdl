@@ -63,11 +63,10 @@ architecture rtl of playground_top is
          s_tx_o_WE : boolean;
 begin
 
-  U_Clash : entity work.topEntity
+  U_Clash : entity work.simTop
   port map(
     clk => clk,
     rst => not rst_n,
-    en => true,
 
     rx_i_ADR      => rx_adr_i,
     rx_i_DAT_MOSI => rx_dat_i,

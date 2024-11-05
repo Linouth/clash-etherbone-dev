@@ -9,6 +9,9 @@ import Debug.Trace
 
 type WBWord = Unsigned 32
 
+-- NOTE: Problem: There is a conditional logic loop in this circuit. It is most
+-- likely because the 'ack' signal is directly dependent on the current 'strobe'
+-- and 'cycle' signals. Fixing this by adding a register for 'selected' signal.
 wishboneScratchpad
   :: forall dom a addrWidth n .
   ( HiddenClockResetEnable dom
@@ -24,10 +27,14 @@ wishboneScratchpad SNat = fromSignals circ
     circ
       :: (Signal dom (WishboneM2S addrWidth selWidth a), ())
       -> (Signal dom (WishboneS2M a), ())
-    circ (wb, _) = (out <$> selected <*> scratchpadValue, ())
+    -- circ (wb, _) = (out <$> selected <*> scratchpadValue, ())
+    circ (wb, _) = (out <$> prevSel <*> prevVal, ())
       where
         selected = (busCycle <$> wb) .&&. strobe <$> wb
         writeEnabled = selected .&&. writeEnable <$> wb
+        
+        prevSel = register False selected
+        prevVal = register undefined scratchpadValue
 
         scratchpadValue :: Signal dom a
         scratchpadValue = scratchpad $ params <$> writeEnabled <*> wb
@@ -43,6 +50,7 @@ wishboneScratchpad SNat = fromSignals circ
         -- to the 'a' type in this scope (so that the NFDataX constraint is set)
         out :: Bool -> a -> WishboneS2M a
         out ack val = (emptyWishboneS2M @a) { readData=val, acknowledge=ack }
+{-# OPAQUE wishboneScratchpad #-}
 
 
 -- Example for using Proxy to use type space Naturals in code
@@ -59,13 +67,16 @@ scratchpad = mealy scratchpadT (map unpack $ iterateI (+1) 0)
 
 
 -- n: number of registers in regfile
-scratchpadT :: (KnownNat n) => Vec n a -> (Bool, Index n, a) -> (Vec n a, a)
+scratchpadT :: (KnownNat n, BitPack a) => Vec n a -> (Bool, Index n, a) -> (Vec n a, a)
 scratchpadT pad (ok, adr, val) = (pad', el)
   where
     pad'
       | ok        = replace adr val pad
       | otherwise = pad
-    el = pad !! adr
+    el
+      | ok        = unpack 0
+      | otherwise = pad !! adr
+    -- el = pad !! adr
 
 
 {-# ANN topEntity

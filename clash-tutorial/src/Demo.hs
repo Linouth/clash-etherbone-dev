@@ -24,28 +24,34 @@ import Scratchpad
 import Protocols
 import Protocols.PacketStream
 import Clash.Cores.Etherbone
+import Protocols.Idle
+import Numeric (showHex)
 
 type DataWidth = 4
 type AddrWidth = 32
 
--- fullCircuit ::
---   ( HiddenClockResetEnable dom )
---   => Circuit (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
---             (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
--- fullCircuit = circuit $ \rx -> do
---   rxS <- mapMeta (const ()) -< rx
---   (txS, wbBus) <- etherboneC -< rxS
---   wishboneScratchpad @_ @(Unsigned (DataWidth*8)) @AddrWidth d4 -< wbBus
---
---   tx <- mapMeta (const testMeta) -< txS
---   idC <| registerBoth -< tx
---   where
---     -- Probe: 4e6f11ff00000086
---     -- Resp:  4e6f164400000086
---     testMeta =
---       ( IPv4Address $ 0xa :> 0x0 :> 0x0 :> 0x1 :> Nil
---       , UdpHeaderLite 5555 5555 8
---       )
+
+fullCircuit ::
+  ( HiddenClockResetEnable dom )
+  => Circuit (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
+            (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
+fullCircuit = circuit $ \rx -> do
+  rxS <- mapMeta (const ()) -< rx
+  (txS, wbBus) <- etherboneC -< rxS
+  wishboneScratchpad @_ @(Unsigned (DataWidth*8)) @AddrWidth d4 -< wbBus
+  -- (txS, wbBus) <- etherboneC @_ @_ @32 @(Unsigned 32) -< rxS
+  -- idleSink -< wbBus
+
+  tx <- mapMeta (const testMeta) -< txS
+  idC -< tx
+  where
+    -- Probe: 4e6f11ff00000086
+    -- Resp:  4e6f164400000086
+    testMeta =
+      ( IPv4Address $ 0xa :> 0x0 :> 0x0 :> 0x1 :> Nil
+      , UdpHeaderLite 5555 5555 8
+      )
+{-# OPAQUE fullCircuit #-}
 
 fcDut = simulateC (withClockResetEnable @System clockGen resetGen enableGen fullCircuit) (SimulationConfig 1 maxBound False)
 
@@ -63,7 +69,67 @@ fcDutInput = P.map (fmap foo) $ P.map (fmap bitCoerce) dat
     
 -- mapM_ putStrLn $ P.take 32 $ top fcDutInput
 
+topInput :: [Maybe (PacketStreamM2S DataWidth ())]
+topInput = 
+  [ pkt Nothing False
+  , pkt Nothing False
+  , pkt (Just 0x4e6f11ff) False
+  , pkt (Just 0x00000086) True
+  , pkt Nothing False
+  -- Two Writes
+  --, pkt (Just 0x4e6f1044) False
+  , pkt (Just 0x4e6f1044) False
+  , pkt (Just 0x280f0002) False
+  , pkt (Just 0x00008000) False
+  , pkt (Just 0x00000004) False
+  , pkt (Just 0x00000008) True
+  , pkt Nothing False
+  , pkt Nothing False
+  -- Write then read
+  --, pkt (Just 0x4e6f1044) False
+  , pkt (Just 0x4e6f1044) False
+  , pkt (Just 0x280f0203) False
+  , pkt (Just 0x00000000) False
+  , pkt (Just 0xdeadbeef) False
+  , pkt (Just 0xcafecafe) False
+  , pkt (Just 0x00008000) False
+  , pkt (Just 0x00000000) False
+  , pkt (Just 0x00000000) False
+  , pkt (Just 0x00000004) True
+  ]
+  where
+    pkt
+      :: Maybe (BitVector 32) -> Bool
+      -> Maybe (PacketStreamM2S DataWidth ())
+    pkt Nothing _ = Nothing
+    pkt (Just x) isLast = Just ps
+      where
+        ps = PacketStreamM2S (bitCoerce x ++ repeat 0) lst () False
+        lst
+          | isLast    = Just 4
+          | otherwise = Nothing
 
+fmtPacketStream :: (KnownNat dataWidth, Show meta) => Maybe (PacketStreamM2S dataWidth meta) -> String
+fmtPacketStream Nothing = "-"
+fmtPacketStream (Just PacketStreamM2S{..}) = 
+  "data: 0x" <> bv2hex (pack _data) <>
+  ", last: " <> show (isJust _last) <>
+  ", meta: " <> show _meta
+
+bv2hex :: (KnownNat n) => BitVector n -> String
+bv2hex bv = showHex bv ""
+
+mapUdp x = x { _meta = testMeta }
+  where
+    testMeta =
+      ( IPv4Address $ 0xa :> 0x0 :> 0x0 :> 0x1 :> Nil
+      , UdpHeaderLite 5555 5555 8
+      )
+
+-- mapM_ putStrLn $ P.map fmtPacketStream $ P.take 32 $ fcDut (P.map (fmap mapUdp) topInput)
+
+
+{-
 fullCircuit :: forall dom .
   ( HiddenClockResetEnable dom )
   => Circuit (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
@@ -75,8 +141,7 @@ fullCircuit = circuit $ \rx -> do
   wishboneScratchpad @_ @(Unsigned (DataWidth*8)) @AddrWidth d4 -< wbBus
   tx <- udpOutC -< (txS, rx1)
   idC -< tx
-
-{-# OPAQUE fullCircuit #-}
+-}
 
 -- fullCircuit = outCkt
 --   where
