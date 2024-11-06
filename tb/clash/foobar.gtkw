@@ -1,22 +1,22 @@
 [*]
 [*] GTKWave Analyzer v3.3.120 (w)1999-2024 BSI
-[*] Mon Nov  4 16:31:12 2024
+[*] Tue Nov  5 21:14:27 2024
 [*]
 [dumpfile] "/home/marten/src/QBayLogic/playground/tb/clash/playground_top.ghw"
-[dumpfile_mtime] "Mon Nov  4 16:26:59 2024"
-[dumpfile_size] 169393
+[dumpfile_mtime] "Tue Nov  5 13:06:42 2024"
+[dumpfile_size] 185542
 [savefile] "/home/marten/src/QBayLogic/playground/tb/clash/foobar.gtkw"
-[timestart] 96100000
-[size] 2560 1361
+[timestart] 173600000
+[size] 1920 1001
 [pos] -1 -1
-*-25.500000 337800000 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+*-25.500000 192100000 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
 [treeopen] top.
 [treeopen] top.playground_top.
 [treeopen] top.playground_top.u_clash.
-[sst_width] 597
-[signals_width] 281
+[sst_width] 366
+[signals_width] 318
 [sst_expanded] 1
-[sst_vpaned_height] 482
+[sst_vpaned_height] 543
 @28
 top.playground_top.clk
 top.playground_top.rst_n
@@ -27,18 +27,12 @@ top.playground_top.rx_cyc_i
 top.playground_top.rx_stb_i
 top.playground_top.rx_ack_o
 top.playground_top.rx_stall_o
-@22
-#{top.playground_top.tx_dat_o[31:0]} top.playground_top.tx_dat_o[31] top.playground_top.tx_dat_o[30] top.playground_top.tx_dat_o[29] top.playground_top.tx_dat_o[28] top.playground_top.tx_dat_o[27] top.playground_top.tx_dat_o[26] top.playground_top.tx_dat_o[25] top.playground_top.tx_dat_o[24] top.playground_top.tx_dat_o[23] top.playground_top.tx_dat_o[22] top.playground_top.tx_dat_o[21] top.playground_top.tx_dat_o[20] top.playground_top.tx_dat_o[19] top.playground_top.tx_dat_o[18] top.playground_top.tx_dat_o[17] top.playground_top.tx_dat_o[16] top.playground_top.tx_dat_o[15] top.playground_top.tx_dat_o[14] top.playground_top.tx_dat_o[13] top.playground_top.tx_dat_o[12] top.playground_top.tx_dat_o[11] top.playground_top.tx_dat_o[10] top.playground_top.tx_dat_o[9] top.playground_top.tx_dat_o[8] top.playground_top.tx_dat_o[7] top.playground_top.tx_dat_o[6] top.playground_top.tx_dat_o[5] top.playground_top.tx_dat_o[4] top.playground_top.tx_dat_o[3] top.playground_top.tx_dat_o[2] top.playground_top.tx_dat_o[1] top.playground_top.tx_dat_o[0]
-@28
-top.playground_top.tx_cyc_o
-top.playground_top.tx_stb_o
-top.playground_top.tx_ack_i
-top.playground_top.tx_stall_i
 @800022
 #{top.playground_top.u_clash.wbpsfwd[117:0]} top.playground_top.u_clash.wbpsfwd[117] top.playground_top.u_clash.wbpsfwd[116] top.playground_top.u_clash.wbpsfwd[115] top.playground_top.u_clash.wbpsfwd[114] top.playground_top.u_clash.wbpsfwd[113] top.playground_top.u_clash.wbpsfwd[112] top.playground_top.u_clash.wbpsfwd[111] top.playground_top.u_clash.wbpsfwd[110] top.playground_top.u_clash.wbpsfwd[109] top.playground_top.u_clash.wbpsfwd[108] top.playground_top.u_clash.wbpsfwd[107] top.playground_top.u_clash.wbpsfwd[106] top.playground_top.u_clash.wbpsfwd[105] top.playground_top.u_clash.wbpsfwd[104] top.playground_top.u_clash.wbpsfwd[103] top.playground_top.u_clash.wbpsfwd[102] top.playground_top.u_clash.wbpsfwd[101] top.playground_top.u_clash.wbpsfwd[100] top.playground_top.u_clash.wbpsfwd[99] top.playground_top.u_clash.wbpsfwd[98] top.playground_top.u_clash.wbpsfwd[97] top.playground_top.u_clash.wbpsfwd[96] top.playground_top.u_clash.wbpsfwd[95] top.playground_top.u_clash.wbpsfwd[94] top.playground_top.u_clash.wbpsfwd[93] top.playground_top.u_clash.wbpsfwd[92] top.playground_top.u_clash.wbpsfwd[91] top.playground_top.u_clash.wbpsfwd[90] top.playground_top.u_clash.wbpsfwd[89] top.playground_top.u_clash.wbpsfwd[88] top.playground_top.u_clash.wbpsfwd[87] top.playground_top.u_clash.wbpsfwd[86] top.playground_top.u_clash.wbpsfwd[85] top.playground_top.u_clash.wbpsfwd[84] top.playground_top.u_clash.wbpsfwd[83] top.playground_top.u_clash.wbpsfwd[82] top.playground_top.u_clash.wbpsfwd[81] top.playground_top.u_clash.wbpsfwd[80] top.playground_top.u_clash.wbpsfwd[79] top.playground_top.u_clash.wbpsfwd[78] top.playground_top.u_clash.wbpsfwd[77] top.playground_top.u_clash.wbpsfwd[76] top.playground_top.u_clash.wbpsfwd[75] top.playground_top.u_clash.wbpsfwd[74] top.playground_top.u_clash.wbpsfwd[73] top.playground_top.u_clash.wbpsfwd[72] top.playground_top.u_clash.wbpsfwd[71] top.playground_top.u_clash.wbpsfwd[70] top.playground_top.u_clash.wbpsfwd[69] top.playground_top.u_clash.wbpsfwd[68] top.playground_top.u_clash.wbpsfwd[67] top.playground_top.u_clash.wbpsfwd[66] top.playground_top.u_clash.wbpsfwd[65] top.playground_top.u_clash.wbpsfwd[64] top.playground_top.u_clash.wbpsfwd[63] top.playground_top.u_clash.wbpsfwd[62] top.playground_top.u_clash.wbpsfwd[61] top.playground_top.u_clash.wbpsfwd[60] top.playground_top.u_clash.wbpsfwd[59] top.playground_top.u_clash.wbpsfwd[58] top.playground_top.u_clash.wbpsfwd[57] top.playground_top.u_clash.wbpsfwd[56] top.playground_top.u_clash.wbpsfwd[55] top.playground_top.u_clash.wbpsfwd[54] top.playground_top.u_clash.wbpsfwd[53] top.playground_top.u_clash.wbpsfwd[52] top.playground_top.u_clash.wbpsfwd[51] top.playground_top.u_clash.wbpsfwd[50] top.playground_top.u_clash.wbpsfwd[49] top.playground_top.u_clash.wbpsfwd[48] top.playground_top.u_clash.wbpsfwd[47] top.playground_top.u_clash.wbpsfwd[46] top.playground_top.u_clash.wbpsfwd[45] top.playground_top.u_clash.wbpsfwd[44] top.playground_top.u_clash.wbpsfwd[43] top.playground_top.u_clash.wbpsfwd[42] top.playground_top.u_clash.wbpsfwd[41] top.playground_top.u_clash.wbpsfwd[40] top.playground_top.u_clash.wbpsfwd[39] top.playground_top.u_clash.wbpsfwd[38] top.playground_top.u_clash.wbpsfwd[37] top.playground_top.u_clash.wbpsfwd[36] top.playground_top.u_clash.wbpsfwd[35] top.playground_top.u_clash.wbpsfwd[34] top.playground_top.u_clash.wbpsfwd[33] top.playground_top.u_clash.wbpsfwd[32] top.playground_top.u_clash.wbpsfwd[31] top.playground_top.u_clash.wbpsfwd[30] top.playground_top.u_clash.wbpsfwd[29] top.playground_top.u_clash.wbpsfwd[28] top.playground_top.u_clash.wbpsfwd[27] top.playground_top.u_clash.wbpsfwd[26] top.playground_top.u_clash.wbpsfwd[25] top.playground_top.u_clash.wbpsfwd[24] top.playground_top.u_clash.wbpsfwd[23] top.playground_top.u_clash.wbpsfwd[22] top.playground_top.u_clash.wbpsfwd[21] top.playground_top.u_clash.wbpsfwd[20] top.playground_top.u_clash.wbpsfwd[19] top.playground_top.u_clash.wbpsfwd[18] top.playground_top.u_clash.wbpsfwd[17] top.playground_top.u_clash.wbpsfwd[16] top.playground_top.u_clash.wbpsfwd[15] top.playground_top.u_clash.wbpsfwd[14] top.playground_top.u_clash.wbpsfwd[13] top.playground_top.u_clash.wbpsfwd[12] top.playground_top.u_clash.wbpsfwd[11] top.playground_top.u_clash.wbpsfwd[10] top.playground_top.u_clash.wbpsfwd[9] top.playground_top.u_clash.wbpsfwd[8] top.playground_top.u_clash.wbpsfwd[7] top.playground_top.u_clash.wbpsfwd[6] top.playground_top.u_clash.wbpsfwd[5] top.playground_top.u_clash.wbpsfwd[4] top.playground_top.u_clash.wbpsfwd[3] top.playground_top.u_clash.wbpsfwd[2] top.playground_top.u_clash.wbpsfwd[1] top.playground_top.u_clash.wbpsfwd[0]
 @c00022
-#{data} top.playground_top.u_clash.wbpsfwd[115] top.playground_top.u_clash.wbpsfwd[114] top.playground_top.u_clash.wbpsfwd[113] top.playground_top.u_clash.wbpsfwd[112] top.playground_top.u_clash.wbpsfwd[111] top.playground_top.u_clash.wbpsfwd[110] top.playground_top.u_clash.wbpsfwd[109] top.playground_top.u_clash.wbpsfwd[108] top.playground_top.u_clash.wbpsfwd[107] top.playground_top.u_clash.wbpsfwd[106] top.playground_top.u_clash.wbpsfwd[105] top.playground_top.u_clash.wbpsfwd[104] top.playground_top.u_clash.wbpsfwd[103] top.playground_top.u_clash.wbpsfwd[102] top.playground_top.u_clash.wbpsfwd[101] top.playground_top.u_clash.wbpsfwd[100] top.playground_top.u_clash.wbpsfwd[99] top.playground_top.u_clash.wbpsfwd[98] top.playground_top.u_clash.wbpsfwd[97] top.playground_top.u_clash.wbpsfwd[96] top.playground_top.u_clash.wbpsfwd[95] top.playground_top.u_clash.wbpsfwd[94] top.playground_top.u_clash.wbpsfwd[93] top.playground_top.u_clash.wbpsfwd[92] top.playground_top.u_clash.wbpsfwd[91] top.playground_top.u_clash.wbpsfwd[90] top.playground_top.u_clash.wbpsfwd[89] top.playground_top.u_clash.wbpsfwd[88] top.playground_top.u_clash.wbpsfwd[87] top.playground_top.u_clash.wbpsfwd[86] top.playground_top.u_clash.wbpsfwd[85]
+#{data} top.playground_top.u_clash.wbpsfwd[116] top.playground_top.u_clash.wbpsfwd[115] top.playground_top.u_clash.wbpsfwd[114] top.playground_top.u_clash.wbpsfwd[113] top.playground_top.u_clash.wbpsfwd[112] top.playground_top.u_clash.wbpsfwd[111] top.playground_top.u_clash.wbpsfwd[110] top.playground_top.u_clash.wbpsfwd[109] top.playground_top.u_clash.wbpsfwd[108] top.playground_top.u_clash.wbpsfwd[107] top.playground_top.u_clash.wbpsfwd[106] top.playground_top.u_clash.wbpsfwd[105] top.playground_top.u_clash.wbpsfwd[104] top.playground_top.u_clash.wbpsfwd[103] top.playground_top.u_clash.wbpsfwd[102] top.playground_top.u_clash.wbpsfwd[101] top.playground_top.u_clash.wbpsfwd[100] top.playground_top.u_clash.wbpsfwd[99] top.playground_top.u_clash.wbpsfwd[98] top.playground_top.u_clash.wbpsfwd[97] top.playground_top.u_clash.wbpsfwd[96] top.playground_top.u_clash.wbpsfwd[95] top.playground_top.u_clash.wbpsfwd[94] top.playground_top.u_clash.wbpsfwd[93] top.playground_top.u_clash.wbpsfwd[92] top.playground_top.u_clash.wbpsfwd[91] top.playground_top.u_clash.wbpsfwd[90] top.playground_top.u_clash.wbpsfwd[89] top.playground_top.u_clash.wbpsfwd[88] top.playground_top.u_clash.wbpsfwd[87] top.playground_top.u_clash.wbpsfwd[86] top.playground_top.u_clash.wbpsfwd[85]
 @28
+top.playground_top.u_clash.wbpsfwd[116]
 top.playground_top.u_clash.wbpsfwd[115]
 top.playground_top.u_clash.wbpsfwd[114]
 top.playground_top.u_clash.wbpsfwd[113]
@@ -72,6 +66,143 @@ top.playground_top.u_clash.wbpsfwd[86]
 top.playground_top.u_clash.wbpsfwd[85]
 @1401200
 -group_end
+@28
++{last} top.playground_top.u_clash.wbpsfwd[84]
+@1001200
+-group_end
+@200
+-
+@22
+#{top.playground_top.tx_dat_o[31:0]} top.playground_top.tx_dat_o[31] top.playground_top.tx_dat_o[30] top.playground_top.tx_dat_o[29] top.playground_top.tx_dat_o[28] top.playground_top.tx_dat_o[27] top.playground_top.tx_dat_o[26] top.playground_top.tx_dat_o[25] top.playground_top.tx_dat_o[24] top.playground_top.tx_dat_o[23] top.playground_top.tx_dat_o[22] top.playground_top.tx_dat_o[21] top.playground_top.tx_dat_o[20] top.playground_top.tx_dat_o[19] top.playground_top.tx_dat_o[18] top.playground_top.tx_dat_o[17] top.playground_top.tx_dat_o[16] top.playground_top.tx_dat_o[15] top.playground_top.tx_dat_o[14] top.playground_top.tx_dat_o[13] top.playground_top.tx_dat_o[12] top.playground_top.tx_dat_o[11] top.playground_top.tx_dat_o[10] top.playground_top.tx_dat_o[9] top.playground_top.tx_dat_o[8] top.playground_top.tx_dat_o[7] top.playground_top.tx_dat_o[6] top.playground_top.tx_dat_o[5] top.playground_top.tx_dat_o[4] top.playground_top.tx_dat_o[3] top.playground_top.tx_dat_o[2] top.playground_top.tx_dat_o[1] top.playground_top.tx_dat_o[0]
+@28
+top.playground_top.tx_cyc_o
+top.playground_top.tx_stb_o
+top.playground_top.tx_ack_i
+top.playground_top.tx_stall_i
+@800022
+#{top.playground_top.u_clash.pswbstate_ds[118:0]} top.playground_top.u_clash.pswbstate_ds[118] top.playground_top.u_clash.pswbstate_ds[117] top.playground_top.u_clash.pswbstate_ds[116] top.playground_top.u_clash.pswbstate_ds[115] top.playground_top.u_clash.pswbstate_ds[114] top.playground_top.u_clash.pswbstate_ds[113] top.playground_top.u_clash.pswbstate_ds[112] top.playground_top.u_clash.pswbstate_ds[111] top.playground_top.u_clash.pswbstate_ds[110] top.playground_top.u_clash.pswbstate_ds[109] top.playground_top.u_clash.pswbstate_ds[108] top.playground_top.u_clash.pswbstate_ds[107] top.playground_top.u_clash.pswbstate_ds[106] top.playground_top.u_clash.pswbstate_ds[105] top.playground_top.u_clash.pswbstate_ds[104] top.playground_top.u_clash.pswbstate_ds[103] top.playground_top.u_clash.pswbstate_ds[102] top.playground_top.u_clash.pswbstate_ds[101] top.playground_top.u_clash.pswbstate_ds[100] top.playground_top.u_clash.pswbstate_ds[99] top.playground_top.u_clash.pswbstate_ds[98] top.playground_top.u_clash.pswbstate_ds[97] top.playground_top.u_clash.pswbstate_ds[96] top.playground_top.u_clash.pswbstate_ds[95] top.playground_top.u_clash.pswbstate_ds[94] top.playground_top.u_clash.pswbstate_ds[93] top.playground_top.u_clash.pswbstate_ds[92] top.playground_top.u_clash.pswbstate_ds[91] top.playground_top.u_clash.pswbstate_ds[90] top.playground_top.u_clash.pswbstate_ds[89] top.playground_top.u_clash.pswbstate_ds[88] top.playground_top.u_clash.pswbstate_ds[87] top.playground_top.u_clash.pswbstate_ds[86] top.playground_top.u_clash.pswbstate_ds[85] top.playground_top.u_clash.pswbstate_ds[84] top.playground_top.u_clash.pswbstate_ds[83] top.playground_top.u_clash.pswbstate_ds[82] top.playground_top.u_clash.pswbstate_ds[81] top.playground_top.u_clash.pswbstate_ds[80] top.playground_top.u_clash.pswbstate_ds[79] top.playground_top.u_clash.pswbstate_ds[78] top.playground_top.u_clash.pswbstate_ds[77] top.playground_top.u_clash.pswbstate_ds[76] top.playground_top.u_clash.pswbstate_ds[75] top.playground_top.u_clash.pswbstate_ds[74] top.playground_top.u_clash.pswbstate_ds[73] top.playground_top.u_clash.pswbstate_ds[72] top.playground_top.u_clash.pswbstate_ds[71] top.playground_top.u_clash.pswbstate_ds[70] top.playground_top.u_clash.pswbstate_ds[69] top.playground_top.u_clash.pswbstate_ds[68] top.playground_top.u_clash.pswbstate_ds[67] top.playground_top.u_clash.pswbstate_ds[66] top.playground_top.u_clash.pswbstate_ds[65] top.playground_top.u_clash.pswbstate_ds[64] top.playground_top.u_clash.pswbstate_ds[63] top.playground_top.u_clash.pswbstate_ds[62] top.playground_top.u_clash.pswbstate_ds[61] top.playground_top.u_clash.pswbstate_ds[60] top.playground_top.u_clash.pswbstate_ds[59] top.playground_top.u_clash.pswbstate_ds[58] top.playground_top.u_clash.pswbstate_ds[57] top.playground_top.u_clash.pswbstate_ds[56] top.playground_top.u_clash.pswbstate_ds[55] top.playground_top.u_clash.pswbstate_ds[54] top.playground_top.u_clash.pswbstate_ds[53] top.playground_top.u_clash.pswbstate_ds[52] top.playground_top.u_clash.pswbstate_ds[51] top.playground_top.u_clash.pswbstate_ds[50] top.playground_top.u_clash.pswbstate_ds[49] top.playground_top.u_clash.pswbstate_ds[48] top.playground_top.u_clash.pswbstate_ds[47] top.playground_top.u_clash.pswbstate_ds[46] top.playground_top.u_clash.pswbstate_ds[45] top.playground_top.u_clash.pswbstate_ds[44] top.playground_top.u_clash.pswbstate_ds[43] top.playground_top.u_clash.pswbstate_ds[42] top.playground_top.u_clash.pswbstate_ds[41] top.playground_top.u_clash.pswbstate_ds[40] top.playground_top.u_clash.pswbstate_ds[39] top.playground_top.u_clash.pswbstate_ds[38] top.playground_top.u_clash.pswbstate_ds[37] top.playground_top.u_clash.pswbstate_ds[36] top.playground_top.u_clash.pswbstate_ds[35] top.playground_top.u_clash.pswbstate_ds[34] top.playground_top.u_clash.pswbstate_ds[33] top.playground_top.u_clash.pswbstate_ds[32] top.playground_top.u_clash.pswbstate_ds[31] top.playground_top.u_clash.pswbstate_ds[30] top.playground_top.u_clash.pswbstate_ds[29] top.playground_top.u_clash.pswbstate_ds[28] top.playground_top.u_clash.pswbstate_ds[27] top.playground_top.u_clash.pswbstate_ds[26] top.playground_top.u_clash.pswbstate_ds[25] top.playground_top.u_clash.pswbstate_ds[24] top.playground_top.u_clash.pswbstate_ds[23] top.playground_top.u_clash.pswbstate_ds[22] top.playground_top.u_clash.pswbstate_ds[21] top.playground_top.u_clash.pswbstate_ds[20] top.playground_top.u_clash.pswbstate_ds[19] top.playground_top.u_clash.pswbstate_ds[18] top.playground_top.u_clash.pswbstate_ds[17] top.playground_top.u_clash.pswbstate_ds[16] top.playground_top.u_clash.pswbstate_ds[15] top.playground_top.u_clash.pswbstate_ds[14] top.playground_top.u_clash.pswbstate_ds[13] top.playground_top.u_clash.pswbstate_ds[12] top.playground_top.u_clash.pswbstate_ds[11] top.playground_top.u_clash.pswbstate_ds[10] top.playground_top.u_clash.pswbstate_ds[9] top.playground_top.u_clash.pswbstate_ds[8] top.playground_top.u_clash.pswbstate_ds[7] top.playground_top.u_clash.pswbstate_ds[6] top.playground_top.u_clash.pswbstate_ds[5] top.playground_top.u_clash.pswbstate_ds[4] top.playground_top.u_clash.pswbstate_ds[3] top.playground_top.u_clash.pswbstate_ds[2] top.playground_top.u_clash.pswbstate_ds[1] top.playground_top.u_clash.pswbstate_ds[0]
+@28
+top.playground_top.u_clash.pswbstate_ds[118]
+top.playground_top.u_clash.pswbstate_ds[117]
+@29
+top.playground_top.u_clash.pswbstate_ds[116]
+@28
+top.playground_top.u_clash.pswbstate_ds[115]
+top.playground_top.u_clash.pswbstate_ds[114]
+top.playground_top.u_clash.pswbstate_ds[113]
+top.playground_top.u_clash.pswbstate_ds[112]
+top.playground_top.u_clash.pswbstate_ds[111]
+top.playground_top.u_clash.pswbstate_ds[110]
+top.playground_top.u_clash.pswbstate_ds[109]
+top.playground_top.u_clash.pswbstate_ds[108]
+top.playground_top.u_clash.pswbstate_ds[107]
+top.playground_top.u_clash.pswbstate_ds[106]
+top.playground_top.u_clash.pswbstate_ds[105]
+top.playground_top.u_clash.pswbstate_ds[104]
+top.playground_top.u_clash.pswbstate_ds[103]
+top.playground_top.u_clash.pswbstate_ds[102]
+top.playground_top.u_clash.pswbstate_ds[101]
+top.playground_top.u_clash.pswbstate_ds[100]
+top.playground_top.u_clash.pswbstate_ds[99]
+top.playground_top.u_clash.pswbstate_ds[98]
+top.playground_top.u_clash.pswbstate_ds[97]
+top.playground_top.u_clash.pswbstate_ds[96]
+top.playground_top.u_clash.pswbstate_ds[95]
+top.playground_top.u_clash.pswbstate_ds[94]
+top.playground_top.u_clash.pswbstate_ds[93]
+top.playground_top.u_clash.pswbstate_ds[92]
+top.playground_top.u_clash.pswbstate_ds[91]
+top.playground_top.u_clash.pswbstate_ds[90]
+top.playground_top.u_clash.pswbstate_ds[89]
+top.playground_top.u_clash.pswbstate_ds[88]
+top.playground_top.u_clash.pswbstate_ds[87]
+top.playground_top.u_clash.pswbstate_ds[86]
+top.playground_top.u_clash.pswbstate_ds[85]
+top.playground_top.u_clash.pswbstate_ds[84]
+top.playground_top.u_clash.pswbstate_ds[83]
+top.playground_top.u_clash.pswbstate_ds[82]
+top.playground_top.u_clash.pswbstate_ds[81]
+top.playground_top.u_clash.pswbstate_ds[80]
+top.playground_top.u_clash.pswbstate_ds[79]
+top.playground_top.u_clash.pswbstate_ds[78]
+top.playground_top.u_clash.pswbstate_ds[77]
+top.playground_top.u_clash.pswbstate_ds[76]
+top.playground_top.u_clash.pswbstate_ds[75]
+top.playground_top.u_clash.pswbstate_ds[74]
+top.playground_top.u_clash.pswbstate_ds[73]
+top.playground_top.u_clash.pswbstate_ds[72]
+top.playground_top.u_clash.pswbstate_ds[71]
+top.playground_top.u_clash.pswbstate_ds[70]
+top.playground_top.u_clash.pswbstate_ds[69]
+top.playground_top.u_clash.pswbstate_ds[68]
+top.playground_top.u_clash.pswbstate_ds[67]
+top.playground_top.u_clash.pswbstate_ds[66]
+top.playground_top.u_clash.pswbstate_ds[65]
+top.playground_top.u_clash.pswbstate_ds[64]
+top.playground_top.u_clash.pswbstate_ds[63]
+top.playground_top.u_clash.pswbstate_ds[62]
+top.playground_top.u_clash.pswbstate_ds[61]
+top.playground_top.u_clash.pswbstate_ds[60]
+top.playground_top.u_clash.pswbstate_ds[59]
+top.playground_top.u_clash.pswbstate_ds[58]
+top.playground_top.u_clash.pswbstate_ds[57]
+top.playground_top.u_clash.pswbstate_ds[56]
+top.playground_top.u_clash.pswbstate_ds[55]
+top.playground_top.u_clash.pswbstate_ds[54]
+top.playground_top.u_clash.pswbstate_ds[53]
+top.playground_top.u_clash.pswbstate_ds[52]
+top.playground_top.u_clash.pswbstate_ds[51]
+top.playground_top.u_clash.pswbstate_ds[50]
+top.playground_top.u_clash.pswbstate_ds[49]
+top.playground_top.u_clash.pswbstate_ds[48]
+top.playground_top.u_clash.pswbstate_ds[47]
+top.playground_top.u_clash.pswbstate_ds[46]
+top.playground_top.u_clash.pswbstate_ds[45]
+top.playground_top.u_clash.pswbstate_ds[44]
+top.playground_top.u_clash.pswbstate_ds[43]
+top.playground_top.u_clash.pswbstate_ds[42]
+top.playground_top.u_clash.pswbstate_ds[41]
+top.playground_top.u_clash.pswbstate_ds[40]
+top.playground_top.u_clash.pswbstate_ds[39]
+top.playground_top.u_clash.pswbstate_ds[38]
+top.playground_top.u_clash.pswbstate_ds[37]
+top.playground_top.u_clash.pswbstate_ds[36]
+top.playground_top.u_clash.pswbstate_ds[35]
+top.playground_top.u_clash.pswbstate_ds[34]
+top.playground_top.u_clash.pswbstate_ds[33]
+top.playground_top.u_clash.pswbstate_ds[32]
+top.playground_top.u_clash.pswbstate_ds[31]
+top.playground_top.u_clash.pswbstate_ds[30]
+top.playground_top.u_clash.pswbstate_ds[29]
+top.playground_top.u_clash.pswbstate_ds[28]
+top.playground_top.u_clash.pswbstate_ds[27]
+top.playground_top.u_clash.pswbstate_ds[26]
+top.playground_top.u_clash.pswbstate_ds[25]
+top.playground_top.u_clash.pswbstate_ds[24]
+top.playground_top.u_clash.pswbstate_ds[23]
+top.playground_top.u_clash.pswbstate_ds[22]
+top.playground_top.u_clash.pswbstate_ds[21]
+top.playground_top.u_clash.pswbstate_ds[20]
+top.playground_top.u_clash.pswbstate_ds[19]
+top.playground_top.u_clash.pswbstate_ds[18]
+top.playground_top.u_clash.pswbstate_ds[17]
+top.playground_top.u_clash.pswbstate_ds[16]
+top.playground_top.u_clash.pswbstate_ds[15]
+top.playground_top.u_clash.pswbstate_ds[14]
+top.playground_top.u_clash.pswbstate_ds[13]
+top.playground_top.u_clash.pswbstate_ds[12]
+top.playground_top.u_clash.pswbstate_ds[11]
+top.playground_top.u_clash.pswbstate_ds[10]
+top.playground_top.u_clash.pswbstate_ds[9]
+top.playground_top.u_clash.pswbstate_ds[8]
+top.playground_top.u_clash.pswbstate_ds[7]
+top.playground_top.u_clash.pswbstate_ds[6]
+top.playground_top.u_clash.pswbstate_ds[5]
+top.playground_top.u_clash.pswbstate_ds[4]
+top.playground_top.u_clash.pswbstate_ds[3]
+top.playground_top.u_clash.pswbstate_ds[2]
+top.playground_top.u_clash.pswbstate_ds[1]
+top.playground_top.u_clash.pswbstate_ds[0]
 @1001200
 -group_end
 [pattern_trace] 1
