@@ -30,13 +30,37 @@ import Numeric (showHex)
 type DataWidth = 4
 type AddrWidth = 32
 
+udpPaddingStripperC ::
+  ( HiddenClockResetEnable dom
+  )
+  => Circuit (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
+             (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
+udpPaddingStripperC = Circuit $ mealyB go 0
+  where
+    go count (Nothing,   oBwd) = (count, (oBwd, Nothing))
+    go count (Just iFwd, oBwd) = (count', (oBwd, oFwd))
+      where
+        count'
+          | isJust (_last iFwd) = 0
+          | _ready oBwd         = min payloadSize (count + dataWidth)
+          | otherwise           = count
+
+        hdr = snd $ _meta iFwd
+        payloadSize = _udplPayloadLength hdr
+        dataWidth = natToNum @DataWidth
+
+        oFwd
+          | count == (payloadSize - dataWidth) = Just $ iFwd { _last = Just maxBound }
+          | count < (payloadSize - dataWidth)  = Just iFwd
+          | otherwise                          = Nothing
+
 
 fullCircuit ::
   ( HiddenClockResetEnable dom )
   => Circuit (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
             (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
 fullCircuit = circuit $ \rx -> do
-  rxS <- mapMeta (const ()) -< rx
+  rxS <- mapMeta (const ()) <| udpPaddingStripperC -< rx
   (txS, wbBus) <- etherboneC -< rxS
   wishboneScratchpad @_ @(Unsigned (DataWidth*8)) @AddrWidth d4 -< wbBus
   -- (txS, wbBus) <- etherboneC @_ @_ @32 @(Unsigned 32) -< rxS
@@ -49,7 +73,7 @@ fullCircuit = circuit $ \rx -> do
     -- Resp:  4e6f164400000086
     testMeta =
       ( IPv4Address $ 0xa :> 0x0 :> 0x0 :> 0x1 :> Nil
-      , UdpHeaderLite 5555 5555 8
+      , UdpHeaderLite 5555 5555 16
       )
 {-# OPAQUE fullCircuit #-}
 
@@ -250,12 +274,12 @@ glue clk rst rxClk rxRst txClk txRst rxGmii txRdy ipAddr = txGmii
 
     ethStack = (exposeClockResetEnable fullStackC clk rst enableGen) rxClk rxRst enableGen txClk txRst enableGen mac ipSubnet
     ckt = circuit $ \gmiiIn -> do
-      psIn <- withClockResetEnable rxClk rxRst enableGen unsafeGmiiRxC -< gmiiIn
-      ethPsIn <- withClockResetEnable rxClk rxRst enableGen registerBoth -< psIn
+      ethPsIn <- withClockResetEnable rxClk rxRst enableGen unsafeGmiiRxC -< gmiiIn
+      -- ethPsIn <- withClockResetEnable rxClk rxRst enableGen registerBoth -< psIn
       (udpIn, ethPsOut) <- ethStack -< (udpOut, ethPsIn)
-      psOut <- withClockResetEnable txClk txRst enableGen registerBoth -< ethPsOut
+      -- psOut <- withClockResetEnable txClk txRst enableGen registerBoth -< ethPsOut
       udpOut <- withClockResetEnable clk rst enableGen fullCircuit -< udpIn
-      gmiiOut <- withClockResetEnable txClk txRst enableGen gmiiTxC txRdy -< psOut
+      gmiiOut <- withClockResetEnable txClk txRst enableGen gmiiTxC txRdy -< ethPsOut
       idC -< gmiiOut
 
     -- swapC :: Circuit (PacketStream dom 4 (IPv4Address, UdpHeaderLite))
