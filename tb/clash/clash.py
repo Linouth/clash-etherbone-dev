@@ -294,22 +294,24 @@ def generate_tests():
     factory.generate_tests()
 # generate_tests()
 
-@cocotb.test()
+@cocotb.test(skip=False)
 async def test_tmp(dut):
     eb_dut = EtherboneDUT(dut)
     await eb_dut.reset()
 
-    inp = '4e6f1044a00f01000000800000000004'
+    inp = '4e6f1044280f010200000004aabbccdd000080000000000400000008'
+
+    # inp = '4e6f1044a00f01000000800000000004'
     cocotb.start_soon(eb_dut.send(bytes.fromhex(inp)))
 
-    await Timer(400, 'ns')
+    await Timer(800, 'ns')
     
     await RisingEdge(dut.clk)
     await RisingEdge(dut.clk)
     # assert(dut.rx_ack_o.value == 1)
 
 
-@cocotb.test()
+@cocotb.test(skip=True)
 async def test_ack_on_rx(dut):
     eb_dut = EtherboneDUT(dut)
     await eb_dut.reset()

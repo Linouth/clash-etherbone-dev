@@ -26,33 +26,46 @@ import Protocols.PacketStream
 import Clash.Cores.Etherbone
 import Protocols.Idle
 import Numeric (showHex)
+import qualified Clash.Prelude as C
+import Clash.Cores.Etherbone.Base (etherboneMagic)
 
 type DataWidth = 4
 type AddrWidth = 32
 
-udpPaddingStripperC ::
+udpPaddingStripperC :: forall dom dataWidth .
   ( HiddenClockResetEnable dom
+  , KnownNat dataWidth
   )
-  => Circuit (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
-             (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
-udpPaddingStripperC = Circuit $ mealyB go 0
+  => Circuit (PacketStream dom dataWidth (IPv4Address, UdpHeaderLite))
+             (PacketStream dom dataWidth (IPv4Address, UdpHeaderLite))
+udpPaddingStripperC = Circuit $ mealyB go (0 :: Unsigned 16)
   where
-    go count (Nothing,   oBwd) = (count, (oBwd, Nothing))
-    go count (Just iFwd, oBwd) = (count', (oBwd, oFwd))
+    go count (Nothing,   _)
+      = (count, (PacketStreamS2M True, Nothing))
+    go count (Just iFwd, PacketStreamS2M oBwd)
+      = (nextCount, (PacketStreamS2M iBwd, oFwd))
       where
-        count'
-          | isJust (_last iFwd) = 0
-          | _ready oBwd         = min payloadSize (count + dataWidth)
-          | otherwise           = count
+        count' = count + dataWidth
+        nextCount
+          | count >= payloadSize = case _last iFwd of
+            Just _ -> 0
+            _      -> count
+          | isJust oFwd && oBwd  = case _last iFwd of
+            Just _ -> 0
+            _      -> count'
+          | otherwise            = count
 
         hdr = snd $ _meta iFwd
         payloadSize = _udplPayloadLength hdr
-        dataWidth = natToNum @DataWidth
+        dataWidth = natToNum @dataWidth
+
+        iBwd = isNothing oFwd || oBwd
 
         oFwd
-          | count == (payloadSize - dataWidth) = Just $ iFwd { _last = Just maxBound }
-          | count < (payloadSize - dataWidth)  = Just iFwd
+          | count' < payloadSize               = Just $ iFwd { _last = Nothing }
+          | count' < (payloadSize + dataWidth) = Just $ iFwd { _last = Just maxBound }
           | otherwise                          = Nothing
+{-# OPAQUE udpPaddingStripperC #-}
 
 
 fullCircuit ::
@@ -60,22 +73,52 @@ fullCircuit ::
   => Circuit (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
             (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
 fullCircuit = circuit $ \rx -> do
-  rxS <- mapMeta (const ()) <| udpPaddingStripperC -< rx
+  [rx', rxM] <- fanout -< rx
+
+  rxS <- mapMeta (const ()) -< rx'
   (txS, wbBus) <- etherboneC -< rxS
   wishboneScratchpad @_ @(Unsigned (DataWidth*8)) @AddrWidth d4 -< wbBus
-  -- (txS, wbBus) <- etherboneC @_ @_ @32 @(Unsigned 32) -< rxS
-  -- idleSink -< wbBus
 
-  tx <- mapMeta (const testMeta) -< txS
+  -- idleSink -< rxM
+  -- tx <- mapMeta (const testMeta) -< txS
+  tx <- ethMetaBypassC -< (rxM, txS)
   idC -< tx
-  where
-    -- Probe: 4e6f11ff00000086
-    -- Resp:  4e6f164400000086
-    testMeta =
-      ( IPv4Address $ 0xa :> 0x0 :> 0x0 :> 0x1 :> Nil
-      , UdpHeaderLite 5555 5555 16
-      )
 {-# OPAQUE fullCircuit #-}
+
+ethMetaBypassC ::
+  ( HiddenClockResetEnable dom )
+  => Circuit ( PacketStream dom DataWidth (IPv4Address, UdpHeaderLite)
+             , PacketStream dom DataWidth () )
+             ( PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
+ethMetaBypassC = Circuit $ B.first unbundle . go . B.first bundle
+  where
+    go = mealyB goT Nothing
+
+    goT Nothing  ((Nothing, _), _)
+      = (Nothing, ((PacketStreamS2M True, PacketStreamS2M False), Nothing))
+    goT Nothing  ((Just m, _), _)
+      = (st', ((PacketStreamS2M True, PacketStreamS2M False), Nothing))
+      where
+        st'
+          | magic == etherboneMagic = Just $ B.second swapPortsL $ _meta m
+          | otherwise               = Nothing
+
+        magic = pack $ take d2 $ _data m
+    goT st@(Just m) ((_, iFwd), PacketStreamS2M oBwd)
+      = (st', ((PacketStreamS2M True, PacketStreamS2M iBwd), oFwd))
+      where
+        st'
+          | oBwd && isJust (iFwd >>= _last) = Nothing
+          | otherwise                       = st
+        iBwd = oBwd
+        metaMap x = x {_meta = m}
+        oFwd = metaMap <$> iFwd
+{-# OPAQUE ethMetaBypassC #-}
+
+testMeta =
+  ( IPv4Address $ 0xa :> 0x0 :> 0x0 :> 0x1 :> Nil
+  , UdpHeaderLite 5555 5555 16
+  )
 
 fcDut = simulateC (withClockResetEnable @System clockGen resetGen enableGen fullCircuit) (SimulationConfig 1 maxBound False)
 
@@ -84,7 +127,7 @@ fcDutInput = P.map (fmap foo) $ P.map (fmap bitCoerce) dat
     foo x = PacketStreamM2S x Nothing meta False
     meta =
       ( IPv4Address $ 0xa :> 0x0 :> 0x0 :> 0x1 :> Nil
-      , UdpHeaderLite 5555 5555 8
+      , UdpHeaderLite 6666 5555 8
       )
 
     dat :: [Maybe (BitVector 32)]
@@ -97,11 +140,11 @@ topInput :: [Maybe (PacketStreamM2S DataWidth ())]
 topInput = 
   [ pkt Nothing False
   , pkt Nothing False
-  , pkt (Just 0x4e6f11ff) False
+  , pkt (Just 0x4e6f1144) False
   , pkt (Just 0x00000086) True
   , pkt Nothing False
   -- Two Writes
-  --, pkt (Just 0x4e6f1044) False
+  -- , pkt (Just 0x4e6f1044) False
   , pkt (Just 0x4e6f1044) False
   , pkt (Just 0x280f0002) False
   , pkt (Just 0x00008000) False
@@ -120,6 +163,7 @@ topInput =
   , pkt (Just 0x00000000) False
   , pkt (Just 0x00000000) False
   , pkt (Just 0x00000004) True
+  , pkt Nothing False
   ]
   where
     pkt
@@ -144,65 +188,8 @@ bv2hex :: (KnownNat n) => BitVector n -> String
 bv2hex bv = showHex bv ""
 
 mapUdp x = x { _meta = testMeta }
-  where
-    testMeta =
-      ( IPv4Address $ 0xa :> 0x0 :> 0x0 :> 0x1 :> Nil
-      , UdpHeaderLite 5555 5555 8
-      )
 
 -- mapM_ putStrLn $ P.map fmtPacketStream $ P.take 32 $ fcDut (P.map (fmap mapUdp) topInput)
-
-
-{-
-fullCircuit :: forall dom .
-  ( HiddenClockResetEnable dom )
-  => Circuit (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
-            (PacketStream dom DataWidth (IPv4Address, UdpHeaderLite))
-fullCircuit = circuit $ \rx -> do
-  [rx0, rx1] <- fanout -< rx
-  rxS <- mapMeta (const ()) -< rx0
-  (txS, wbBus) <- etherboneC -< rxS
-  wishboneScratchpad @_ @(Unsigned (DataWidth*8)) @AddrWidth d4 -< wbBus
-  tx <- udpOutC -< (txS, rx1)
-  idC -< tx
--}
-
--- fullCircuit = outCkt
---   where
---     outCkt (fwdIn, _) = out
---       where
---         out = udpOutC meta <| ckt <| mapMeta (const ())
---         ckt = circuit $ \rx -> do
---           (tx, wbBus) <- etherboneC -< rx
---           wishboneScratchpad @_ @(Unsigned (DataWidth*8)) @AddrWidth d4 -< wbBus
---           idC -< tx
---
---         meta :: Signal dom (Maybe (IPv4Address, UdpHeaderLite))
---         meta = fwdIn >>= _meta
-
-
---   go
---     :: ((Maybe (PacketStreamM2S dataWidth ()),
---          Maybe (PacketStreamM2S dataWidth (IPv4Address, UdpHeaderLite))),
---         PacketStreamS2M)
---        -> ((PacketStreamS2M, PacketStreamS2M),
---            Maybe (PacketStreamM2S dataWidth (IPv4Address, UdpHeaderLite))) [-Wdeferred-out-of-scope-variables]
-
-udpOutC ::
-  Circuit (PacketStream dom dataWidth (), PacketStream dom dataWidth (IPv4Address, UdpHeaderLite))
-          (PacketStream dom dataWidth (IPv4Address, UdpHeaderLite))
-udpOutC = Circuit (B.first unbundle . unbundle . fmap go . bundle . B.first bundle)
-  where
-    go ((Just fwdIn, Just bypass), bwdIn) = ((bwdIn, PacketStreamS2M True), Just fwdOut)
-      where
-        fwdOut = fwdIn {_meta = swapped}
-        swapped = B.second swap (_meta bypass)
-        swap h@UdpHeaderLite{..} = h { _udplSrcPort = _udplDstPort
-                                     , _udplDstPort = _udplSrcPort
-                                     }
-    go ((Nothing, _), bwdIn) = ((bwdIn, PacketStreamS2M True), Nothing)
-    -- Assumption incorrect. This can definitely happen
-    go ((Just _, Nothing), _) = errorX "This should not happend with the current implementation (due to back-pressure)"
 
 
 createDomain vXilinxSystem{vName="Ext125", vPeriod= hzToPeriod 125e6, vResetKind=Asynchronous}
@@ -278,18 +265,19 @@ glue clk rst rxClk rxRst txClk txRst rxGmii txRdy ipAddr = txGmii
       -- ethPsIn <- withClockResetEnable rxClk rxRst enableGen registerBoth -< psIn
       (udpIn, ethPsOut) <- ethStack -< (udpOut, ethPsIn)
       -- psOut <- withClockResetEnable txClk txRst enableGen registerBoth -< ethPsOut
-      udpOut <- withClockResetEnable clk rst enableGen fullCircuit -< udpIn
+      udpOut <- withClockResetEnable clk rst enableGen fullCircuit <| withClockResetEnable clk rst enableGen udpPaddingStripperC -< udpIn
+      -- udpOut <- withClockResetEnable clk rst enableGen swapC <| withClockResetEnable clk rst enableGen udpPaddingStripperC -< udpIn
       gmiiOut <- withClockResetEnable txClk txRst enableGen gmiiTxC txRdy -< ethPsOut
       idC -< gmiiOut
 
-    -- swapC :: Circuit (PacketStream dom 4 (IPv4Address, UdpHeaderLite))
-    --                  (PacketStream dom 4 (IPv4Address, UdpHeaderLite))
-    -- swapC = bimapMeta ipMap hdrMap
-    --   where
-    --     ipMap ip = prefixName @"UDPIP" ip
-    --     hdrMap hdr@UdpHeaderLite{..} = hdr { _udplSrcPort = _udplDstPort
-    --                                        , _udplDstPort = _udplSrcPort
-    --                                        }
+    swapC :: Circuit (PacketStream dom 4 (IPv4Address, UdpHeaderLite))
+                     (PacketStream dom 4 (IPv4Address, UdpHeaderLite))
+    swapC = bimapMeta ipMap hdrMap
+      where
+        ipMap ip = prefixName @"UDPIP" ip
+        hdrMap hdr@UdpHeaderLite{..} = hdr { _udplSrcPort = _udplDstPort
+                                           , _udplDstPort = _udplSrcPort
+                                           }
 {-# OPAQUE glue #-}
 
 

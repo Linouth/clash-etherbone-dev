@@ -57,14 +57,14 @@ ps2wbC = Circuit $ prefixName @"pswbState" mealyB go (Idle False)
       where
         wbFwd = wbBase { strobe=False, busCycle = cyc}
         psBwd = PacketStreamS2M True
-    go Idle{} (Just PacketStreamM2S{_last=Just 0}, _) = (Idle False, (psBwd, wbFwd))
-      where
-        wbFwd = wbBase { strobe=False, busCycle = False}
-        psBwd = PacketStreamS2M True
+    -- go Idle{} (Just PacketStreamM2S{_last=Just 0}, _) = (Idle False, (psBwd, wbFwd))
+    --   where
+    --     wbFwd = wbBase { strobe=False, busCycle = False}
+    --     psBwd = PacketStreamS2M True
     go Idle{..} (Just f, _) = (Data f, (psBwd, wbFwd))
       where
         wbFwd = wbBase { strobe=False, busCycle=cyc}
-        psBwd = PacketStreamS2M False
+        psBwd = PacketStreamS2M True
     go Data{..} (_, _) = (WFA cyc dat, (psBwd, wbFwd))
       where
         wbFwd = wbBase {strobe=True, busCycle=True, writeData=dat}
@@ -79,9 +79,11 @@ ps2wbC = Circuit $ prefixName @"pswbState" mealyB go (Idle False)
       where
         -- strobe should be true in classic, but the CocoTB tb uses pipelined
         wbFwd = wbBase {strobe=False, busCycle=True, writeData=dat}
-        psBwd = PacketStreamS2M True
+        psBwd = PacketStreamS2M False
       
     wbBase = (emptyWishboneM2S @_ @WBData) { strobe=False, busCycle=False, writeEnable=True }
+{-# NOINLINE ps2wbC #-}
+-- {-# OPAQUE ps2wbC #-}
 
 
 
@@ -97,6 +99,13 @@ simTop clk rst rx_i tx_i = (rx_o, tx_o)
   where
     (rx_o, tx_o) = toSignals ckt (rx_i, tx_i)
       where
-        ckt = withClockResetEnable clk rst enableGen (wb2psC |> fullCircuit |> ps2wbC)
+        ckt = withClockResetEnable clk rst enableGen
+          (  wb2psC
+          |> packetFifoC d10 d4 Drop
+          |> stripTrailingEmptyC
+          |> fullCircuit
+          |> packetFifoC d10 d4 Drop
+          |> ps2wbC
+          )
 
 makeTopEntity 'simTop
