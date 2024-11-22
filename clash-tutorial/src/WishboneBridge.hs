@@ -1,19 +1,17 @@
 module WishboneBridge where
 
+import Clash.Annotations.TH (makeTopEntity)
+import Clash.Cores.Etherbone.Examples.WishboneBus
+import Clash.Cores.Ethernet.IPv4
+import Clash.Cores.Ethernet.Udp
 import Clash.Prelude
 import Protocols
-import Protocols.Wishbone
 import Protocols.PacketStream
-import Clash.Cores.Ethernet.Udp
-import Clash.Cores.Ethernet.IPv4
-import Clash.Annotations.TH (makeTopEntity)
-import Clash.Magic
+import Protocols.Wishbone
 
-import Demo (DataWidth, AddrWidth, fullCircuit)
 import Data.Maybe
+import Clash.Cores.Etherbone.Examples.FullEthernetCircuit
 
-
-type WBData = BitVector 32
 
 wb2psC :: forall dom.
   ( HiddenClockResetEnable dom )
@@ -43,7 +41,7 @@ wb2psC = Circuit go
 
 data PSWBState
   = Idle {cyc :: Bool}
-  | Data {ps  :: PacketStreamM2S 4 (IPv4Address, UdpHeaderLite)}
+  | Data {ps  :: PacketStreamM2S DataWidth (IPv4Address, UdpHeaderLite)}
   | WFA  {cyc :: Bool, dat :: WBData}
   deriving (Generic, NFDataX, Show, ShowX)
 
@@ -57,10 +55,6 @@ ps2wbC = Circuit $ prefixName @"pswbState" mealyB go (Idle False)
       where
         wbFwd = wbBase { strobe=False, busCycle = cyc}
         psBwd = PacketStreamS2M True
-    -- go Idle{} (Just PacketStreamM2S{_last=Just 0}, _) = (Idle False, (psBwd, wbFwd))
-    --   where
-    --     wbFwd = wbBase { strobe=False, busCycle = False}
-    --     psBwd = PacketStreamS2M True
     go Idle{..} (Just f, _) = (Data f, (psBwd, wbFwd))
       where
         wbFwd = wbBase { strobe=False, busCycle=cyc}
@@ -83,17 +77,14 @@ ps2wbC = Circuit $ prefixName @"pswbState" mealyB go (Idle False)
       
     wbBase = (emptyWishboneM2S @_ @WBData) { strobe=False, busCycle=False, writeEnable=True }
 {-# NOINLINE ps2wbC #-}
--- {-# OPAQUE ps2wbC #-}
-
-
 
 simTop
   :: "clk" ::: Clock System
   -> "rst" ::: Reset System
-  -> "rx_i" ::: Signal System (WishboneM2S AddrWidth 4 WBData)
+  -> "rx_i" ::: Signal System (WishboneM2S AddrWidth DataWidth WBData)
   -> "tx_i" ::: Signal System (WishboneS2M WBData)
   -> ( "rx_o" ::: Signal System (WishboneS2M WBData)
-     , "tx_o" ::: Signal System (WishboneM2S AddrWidth 4 WBData)
+     , "tx_o" ::: Signal System (WishboneM2S AddrWidth DataWidth WBData)
      )
 simTop clk rst rx_i tx_i = (rx_o, tx_o)
   where

@@ -85,8 +85,12 @@ class WishboneMasterMonitor:
     stream is finished (signalled with an event) combine data in the list into
     one 'packet' that is awaited from recv()
     '''
-    def __init__(self, clk: SimHandleBase, port: WishboneMasterPort, log: Logger|None):
+    def __init__(self, clk: SimHandleBase, port: WishboneMasterPort, log:
+                 Logger|None, dataWidth: int=4):
         self._log = log or logger
+
+        # Data width in bytes
+        self.dataWidth = dataWidth
 
         self.clk = clk
         self.port = port
@@ -132,7 +136,7 @@ class WishboneMasterMonitor:
 
                 # Format words into a single byte string
                 dat = b''.join([
-                    int(x).to_bytes(4) for x in self._words
+                    int(x).to_bytes(self.dataWidth) for x in self._words
                 ])
                 self._words.clear()
                 self._log.debug(f'Monitor datastream: {dat.hex()}')
@@ -159,8 +163,11 @@ class WishboneMasterMonitor:
 
 
 class EtherboneDUT:
-    def __init__(self, dut, period=(10, 'ns'), log: Logger|None=None):
+    def __init__(self, dut, period=(10, 'ns'), log: Logger|None=None,
+                 bitWidth: int=32):
         self._log = log or logger
+
+        self.bitWidth = bitWidth
 
         self.dut = dut
 
@@ -168,7 +175,7 @@ class EtherboneDUT:
         cocotb.start_soon(self.clock.start())
 
         self.rx = WishboneMaster(dut, "rx", dut.clk,
-                                 width=32,
+                                 width=bitWidth,
                                  timeout=20,
                                  signals_dict={"cyc":  "cyc_i",
                                              "stb":  "stb_i",
@@ -180,7 +187,7 @@ class EtherboneDUT:
 
         # This is currently unconnected in hardware (looped back to EB master)
         self.cfg = WishboneMaster(dut, "cfg", dut.clk,
-                                  width=32,
+                                  width=bitWidth,
                                   timeout=20,
                                   signals_dict={"cyc":  "cyc_i",
                                               "stb":  "stb_i",
@@ -205,7 +212,8 @@ class EtherboneDUT:
         )
         init_wishbone_masters([self.tx_port])
 
-        self.tx = WishboneMasterMonitor(dut.clk, self.tx_port, self._log)
+        self.tx = WishboneMasterMonitor(dut.clk, self.tx_port, self._log,
+                                        bitWidth // 8)
         self.tx.start()
 
         dut.rst_n.value = 0
@@ -219,8 +227,14 @@ class EtherboneDUT:
 
     # Send bytes to the RX wishbone port
     def send(self, data: bytes):
+        if self.bitWidth == 32:
+            fmt = '>I'
+        elif self.bitWidth == 64:
+            fmt = '>Q'
+        else:
+            raise ValueError('Only 32 and 64-bit WB busses are supported.')
         return self.rx.send_cycle([
-            WBOp(0, x) for x in bytes_to_ints(data)
+            WBOp(0, x) for x in bytes_to_ints(data, fmt)
         ])
 
     # Receive data from the TX wishbone port
@@ -294,7 +308,7 @@ def generate_tests():
     factory.generate_tests()
 # generate_tests()
 
-@cocotb.test(skip=False)
+@cocotb.test(skip=True)
 async def test_tmp(dut):
     eb_dut = EtherboneDUT(dut)
     await eb_dut.reset()
@@ -326,11 +340,11 @@ async def test_ack_on_rx(dut):
     assert(dut.rx_ack_o.value == 1)
 
 
-@cocotb.test(skip=True)
+@cocotb.test(skip=False)
 # @cocotb.test(skip=False)
 async def test_socket(dut):
     log = logger.getChild('Socket')
-    eb_dut = EtherboneDUT(dut, log=log)
+    eb_dut = EtherboneDUT(dut, log=log, bitWidth=32)
     await eb_dut.reset()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

@@ -3,32 +3,22 @@ module Tests.Demo where
 import Prelude
 
 import Hedgehog
-import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
 
 import Test.Tasty
 import Test.Tasty.TH
 import Test.Tasty.Hedgehog
 
 import Protocols.Hedgehog
--- import Protocols.PacketStream.Hedgehog
 
-import Demo
-import Clash.Hedgehog.Sized.BitVector (genBitVector)
 import Protocols
 import Protocols.PacketStream
-import Protocols.Df(Df)
-import qualified Protocols.PacketStream as PS
-import qualified Protocols.Df as Df
-import Protocols.PacketStream.Hedgehog
-import qualified Data.List as L
 import qualified Data.Bifunctor as B
-import Data.Maybe
-import Debug.Trace
 import qualified Clash.Prelude as C
 import Clash.Prelude (Vec (..))
 import Clash.Cores.Ethernet.IP.IPv4Types (IPv4Address (..))
 import Clash.Cores.Ethernet.Udp (UdpHeaderLite (..), swapPortsL)
+import Clash.Cores.Etherbone.Examples.WishboneBus
+import Clash.Cores.Etherbone.Examples.FullEthernetCircuit
 
 pkt
   :: C.BitVector 32 -> Bool
@@ -43,6 +33,11 @@ pkt x isLast = ps
 testMetaMap :: PacketStreamM2S dw () -> PacketStreamM2S dw (IPv4Address, UdpHeaderLite)
 testMetaMap x =
   x { _meta = testMeta }
+
+testMeta =
+  ( IPv4Address $ 0xa :> 0x0 :> 0x0 :> 0x1 :> Nil
+  , UdpHeaderLite 5555 5555 16
+  )
 
 swapMap :: PacketStreamM2S dw (IPv4Address, UdpHeaderLite) -> PacketStreamM2S dw (IPv4Address, UdpHeaderLite)
 swapMap x =

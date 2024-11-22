@@ -4,47 +4,52 @@ use ieee.numeric_std.all;
 
 
 entity playground_top is
+  generic(
+    DATA_WIDTH : integer := 32;
+    ADDR_WIDTH : integer := 32;
+    SEL_WIDTH : integer  := 4
+  );
   port(
     clk   : in std_logic;
     rst_n : in std_logic;
 
     -- RX Wishbone bus (slave)
-    rx_adr_i : in std_logic_vector(31 downto 0);
-    rx_dat_i : in std_logic_vector(31 downto 0);
+    rx_adr_i : in std_logic_vector(ADDR_WIDTH-1 downto 0);
+    rx_dat_i : in std_logic_vector(DATA_WIDTH-1 downto 0);
     rx_we_i  : in std_logic;
-    rx_sel_i : in std_logic_vector(3 downto 0);
+    rx_sel_i : in std_logic_vector(SEL_WIDTH-1 downto 0);
     rx_stb_i : in std_logic;
     rx_cyc_i : in std_logic;
 
-    rx_dat_o    : out std_logic_vector(31 downto 0);
+    rx_dat_o    : out std_logic_vector(DATA_WIDTH-1 downto 0);
     rx_ack_o    : out std_logic;
     rx_stall_o  : out std_logic;
     rx_rty_o    : out std_logic;
     rx_err_o    : out std_logic;
 
     -- TX Wishbone bus (master)
-    tx_adr_o : out std_logic_vector(31 downto 0);
-    tx_dat_o : out std_logic_vector(31 downto 0);
+    tx_adr_o : out std_logic_vector(ADDR_WIDTH-1 downto 0);
+    tx_dat_o : out std_logic_vector(DATA_WIDTH-1 downto 0);
     tx_we_o  : out std_logic;
-    tx_sel_o : out std_logic_vector(3 downto 0);
+    tx_sel_o : out std_logic_vector(SEL_WIDTH-1 downto 0);
     tx_stb_o : out std_logic;
     tx_cyc_o : out std_logic;
 
-    tx_dat_i    : in std_logic_vector(31 downto 0);
+    tx_dat_i    : in std_logic_vector(DATA_WIDTH-1 downto 0);
     tx_ack_i    : in std_logic;
     tx_stall_i  : in std_logic;
     tx_rty_i    : in std_logic;
     tx_err_i    : in std_logic;
 
     -- Configuration Wishbone bus (slave) (Obsolete?)
-    cfg_adr_i : in std_logic_vector(31 downto 0);
-    cfg_dat_i : in std_logic_vector(31 downto 0);
+    cfg_adr_i : in std_logic_vector(ADDR_WIDTH-1 downto 0);
+    cfg_dat_i : in std_logic_vector(DATA_WIDTH-1 downto 0);
     cfg_we_i  : in std_logic;
-    cfg_sel_i : in std_logic_vector(3 downto 0);
+    cfg_sel_i : in std_logic_vector(SEL_WIDTH-1 downto 0);
     cfg_stb_i : in std_logic;
     cfg_cyc_i : in std_logic;
 
-    cfg_dat_o    : out std_logic_vector(31 downto 0);
+    cfg_dat_o    : out std_logic_vector(DATA_WIDTH-1 downto 0);
     cfg_ack_o    : out std_logic;
     cfg_stall_o  : out std_logic;
     cfg_rty_o    : out std_logic;
